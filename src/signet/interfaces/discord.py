@@ -9,7 +9,9 @@ import structlog
 from signet.brain.client import Brain
 from signet.character.prompt import PromptAssembler
 from signet.config import settings
+from signet.knowledge.store import WikiStore
 from signet.memory.store import MemoryStore
+from signet.models.knowledge import WikiSearchResult
 from signet.models.memory import MemoryResult, Message, MessageRole
 
 log = structlog.get_logger()
@@ -25,6 +27,7 @@ class SignetBot(discord.Client):
         assembler: PromptAssembler,
         brain: Brain,
         memory: MemoryStore,
+        wiki: WikiStore,
     ) -> None:
         intents = discord.Intents.default()
         intents.message_content = True
@@ -34,6 +37,7 @@ class SignetBot(discord.Client):
         self._assembler = assembler
         self._brain = brain
         self._memory = memory
+        self._wiki = wiki
 
     async def setup_hook(self) -> None:
         """Called by discord.py after login, before events. Async init goes here."""
@@ -41,7 +45,13 @@ class SignetBot(discord.Client):
         await self._memory.initialize_schema()
         log.info("discord.memory_ready")
 
+        await self._wiki.connect()
+        await self._wiki.initialize_schema()
+        await self._wiki.sync()
+        log.info("discord.wiki_ready")
+
     async def close(self) -> None:
+        await self._wiki.close()
         await self._memory.close()
         await super().close()
 
@@ -106,11 +116,20 @@ class SignetBot(discord.Client):
             limit=settings.memory_recall_limit,
         )
 
+        # Wiki knowledge search
+        wiki_results = await self._wiki.search(
+            query=content,
+            limit=settings.wiki_recall_limit,
+            min_similarity=settings.wiki_min_similarity,
+        )
+
         memory_context = _format_memories(memories) if memories else ""
+        wiki_context = _format_wiki_context(wiki_results) if wiki_results else ""
 
         system = self._assembler.build_system_prompt(
             platform="discord",
             memory_context=memory_context,
+            wiki_context=wiki_context,
         )
 
         try:
@@ -162,6 +181,24 @@ def _format_memories(memories: list[MemoryResult]) -> str:
     return header + "\n" + "\n".join(lines)
 
 
+def _format_wiki_context(results: list[WikiSearchResult]) -> str:
+    """Format wiki articles as context for the system prompt."""
+    sections = []
+    for result in results:
+        fm = result.article.frontmatter
+        excerpt = " ".join(result.article.body.split()[:300])
+        parts = [f"### {fm.title}"]
+        if fm.summary:
+            parts.append(fm.summary)
+        parts.append(excerpt)
+        if fm.tags:
+            parts.append(f"Tags: {', '.join(fm.tags)}")
+        sections.append("\n".join(parts))
+
+    header = "Relevant knowledge from your research wiki (reference naturally when relevant):"
+    return header + "\n\n" + "\n\n".join(sections)
+
+
 def _split_message(text: str, limit: int = 2000) -> list[str]:
     """Split a message into chunks that fit Discord's character limit."""
     if len(text) <= limit:
@@ -182,7 +219,12 @@ def _split_message(text: str, limit: int = 2000) -> list[str]:
     return chunks
 
 
-def run_discord_bot(assembler: PromptAssembler, brain: Brain, memory: MemoryStore) -> None:
+def run_discord_bot(
+    assembler: PromptAssembler,
+    brain: Brain,
+    memory: MemoryStore,
+    wiki: WikiStore,
+) -> None:
     """Start the Discord bot. Blocks until shutdown."""
-    bot = SignetBot(assembler, brain, memory)
+    bot = SignetBot(assembler, brain, memory, wiki)
     bot.run(settings.discord_token, log_handler=None)

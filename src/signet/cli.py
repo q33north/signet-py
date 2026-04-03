@@ -4,10 +4,13 @@ from __future__ import annotations
 import structlog
 import typer
 from rich.console import Console
+from rich.table import Table
 
 from signet.config import settings
 
 app = typer.Typer(help="Signet: persistent AI research agent")
+wiki_app = typer.Typer(help="Wiki knowledge management")
+app.add_typer(wiki_app, name="wiki")
 console = Console()
 
 
@@ -35,6 +38,7 @@ def run() -> None:
     from signet.character.loader import load_character
     from signet.character.prompt import PromptAssembler
     from signet.interfaces.discord import run_discord_bot
+    from signet.knowledge.store import WikiStore
     from signet.memory.embeddings import EmbeddingService
     from signet.memory.store import MemoryStore
 
@@ -46,9 +50,14 @@ def run() -> None:
     brain = Brain()
     embedder = EmbeddingService(model_name=settings.embedding_model)
     memory = MemoryStore(database_url=settings.database_url, embedder=embedder)
+    wiki = WikiStore(
+        wikis_path=settings.wikis_path,
+        database_url=settings.database_url,
+        embedder=embedder,
+    )
 
     console.print(f"[bold green]Starting {character.name}...[/bold green]")
-    run_discord_bot(assembler, brain, memory)
+    run_discord_bot(assembler, brain, memory, wiki)
 
 
 @app.command()
@@ -76,19 +85,131 @@ def db_init() -> None:
     """Initialize the database schema. Idempotent, safe to run multiple times."""
     import asyncio
 
+    from signet.knowledge.store import WikiStore
     from signet.memory.embeddings import EmbeddingService
     from signet.memory.store import MemoryStore
 
     async def _init() -> None:
         embedder = EmbeddingService(model_name=settings.embedding_model)
-        store = MemoryStore(database_url=settings.database_url, embedder=embedder)
-        await store.connect()
-        await store.initialize_schema()
-        await store.close()
+        memory = MemoryStore(database_url=settings.database_url, embedder=embedder)
+        wiki = WikiStore(
+            wikis_path=settings.wikis_path,
+            database_url=settings.database_url,
+            embedder=embedder,
+        )
+        await memory.connect()
+        await memory.initialize_schema()
+        await wiki.connect()
+        await wiki.initialize_schema()
+        await wiki.close()
+        await memory.close()
 
     console.print(f"[bold]Connecting to:[/bold] {settings.database_url.split('@')[-1]}")
     asyncio.run(_init())
-    console.print("[bold green]Database schema initialized.[/bold green]")
+    console.print("[bold green]Database schema initialized (memory + wiki).[/bold green]")
+
+
+# ── Wiki subcommands ────────────────────────────────────────
+
+
+@wiki_app.command()
+def sync() -> None:
+    """Sync wiki articles from disk to database. Re-embeds changed files."""
+    import asyncio
+
+    from signet.knowledge.store import WikiStore
+    from signet.memory.embeddings import EmbeddingService
+
+    async def _sync() -> dict[str, int]:
+        embedder = EmbeddingService(model_name=settings.embedding_model)
+        store = WikiStore(
+            wikis_path=settings.wikis_path,
+            database_url=settings.database_url,
+            embedder=embedder,
+        )
+        await store.connect()
+        await store.initialize_schema()
+        result = await store.sync()
+        await store.close()
+        return result
+
+    console.print(f"[bold]Scanning:[/bold] {settings.wikis_path}")
+    result = asyncio.run(_sync())
+    console.print(
+        f"[green]added={result['added']} updated={result['updated']} "
+        f"removed={result['removed']}[/green]"
+    )
+
+
+@wiki_app.command("list")
+def list_articles() -> None:
+    """List all indexed wiki articles."""
+    import asyncio
+
+    from signet.knowledge.store import WikiStore
+    from signet.memory.embeddings import EmbeddingService
+
+    async def _list() -> list[dict]:
+        embedder = EmbeddingService(model_name=settings.embedding_model)
+        store = WikiStore(
+            wikis_path=settings.wikis_path,
+            database_url=settings.database_url,
+            embedder=embedder,
+        )
+        await store.connect()
+        articles = await store.list_articles()
+        await store.close()
+        return articles
+
+    articles = asyncio.run(_list())
+    if not articles:
+        console.print("[dim]No wiki articles indexed. Add .md files to wikis/ and run: signet wiki sync[/dim]")
+        return
+
+    table = Table(title="Wiki Articles")
+    table.add_column("Slug", style="cyan")
+    table.add_column("Title")
+    table.add_column("Tags", style="dim")
+    table.add_column("Updated")
+
+    for a in articles:
+        tags = ", ".join(a["tags"]) if a["tags"] else ""
+        updated = str(a["updated_at"].date()) if a["updated_at"] else ""
+        table.add_row(a["slug"], a["title"], tags, updated)
+
+    console.print(table)
+
+
+@wiki_app.command()
+def search(query: str, limit: int = 5) -> None:
+    """Semantic search across wiki articles."""
+    import asyncio
+
+    from signet.knowledge.store import WikiStore
+    from signet.memory.embeddings import EmbeddingService
+
+    async def _search() -> list:
+        embedder = EmbeddingService(model_name=settings.embedding_model)
+        store = WikiStore(
+            wikis_path=settings.wikis_path,
+            database_url=settings.database_url,
+            embedder=embedder,
+        )
+        await store.connect()
+        results = await store.search(query, limit=limit, min_similarity=0.0)
+        await store.close()
+        return results
+
+    results = asyncio.run(_search())
+    if not results:
+        console.print("[dim]No results.[/dim]")
+        return
+
+    for r in results:
+        sim = f"{r.similarity:.3f}"
+        console.print(f"[cyan]{r.article.slug}[/cyan] ({sim}) - {r.article.frontmatter.title}")
+        if r.article.frontmatter.summary:
+            console.print(f"  [dim]{r.article.frontmatter.summary}[/dim]")
 
 
 if __name__ == "__main__":

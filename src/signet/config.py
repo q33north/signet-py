@@ -27,6 +27,10 @@ class Settings(BaseSettings):
     # Memory
     memory_recall_limit: int = 5
 
+    # Wiki
+    wiki_recall_limit: int = 3
+    wiki_min_similarity: float = 0.3
+
     # Paths
     project_root: Path = Path(__file__).parent.parent.parent
     character_path: Path = Path(__file__).parent.parent.parent / "characters" / "signet.yaml"
