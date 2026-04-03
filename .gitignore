@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+.venv/
+wikis/*/raw/
+audit/*.jsonl
+.memsearch/
