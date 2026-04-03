@@ -30,6 +30,9 @@ db = [
     "pgvector>=0.3",
     "sentence-transformers>=3.0",
 ]
+ingest = [
+    "docling>=2.70",
+]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",

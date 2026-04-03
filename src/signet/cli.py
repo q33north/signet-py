@@ -212,5 +212,44 @@ def search(query: str, limit: int = 5) -> None:
             console.print(f"  [dim]{r.article.frontmatter.summary}[/dim]")
 
 
+@wiki_app.command()
+def ingest(force: bool = typer.Option(False, "--force", help="Re-convert even if .md exists")) -> None:
+    """Convert PDFs in raw/ directories to markdown via Docling."""
+    import asyncio
+
+    from signet.knowledge.ingest import ingest_raw
+    from signet.knowledge.store import WikiStore
+    from signet.memory.embeddings import EmbeddingService
+
+    console.print(f"[bold]Ingesting from:[/bold] {settings.wikis_path}/*/raw/")
+    result = ingest_raw(settings.wikis_path, force=force)
+    console.print(
+        f"[green]converted={result['converted']} skipped={result['skipped']} "
+        f"errored={result['errored']}[/green]"
+    )
+
+    if result["converted"] > 0:
+        console.print("[bold]Syncing new articles to database...[/bold]")
+
+        async def _sync() -> dict[str, int]:
+            embedder = EmbeddingService(model_name=settings.embedding_model)
+            store = WikiStore(
+                wikis_path=settings.wikis_path,
+                database_url=settings.database_url,
+                embedder=embedder,
+            )
+            await store.connect()
+            await store.initialize_schema()
+            sync_result = await store.sync()
+            await store.close()
+            return sync_result
+
+        sync_result = asyncio.run(_sync())
+        console.print(
+            f"[green]added={sync_result['added']} updated={sync_result['updated']} "
+            f"removed={sync_result['removed']}[/green]"
+        )
+
+
 if __name__ == "__main__":
     app()
