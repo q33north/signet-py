@@ -11,8 +11,10 @@ from signet.config import settings
 app = typer.Typer(help="Signet: persistent AI research agent")
 wiki_app = typer.Typer(help="Wiki knowledge management")
 dream_app = typer.Typer(help="autoDream memory consolidation")
+nightshift_app = typer.Typer(help="Nightshift autonomous research")
 app.add_typer(wiki_app, name="wiki")
 app.add_typer(dream_app, name="dream")
+app.add_typer(nightshift_app, name="nightshift")
 console = Console()
 
 
@@ -43,6 +45,7 @@ def run() -> None:
     from signet.knowledge.store import WikiStore
     from signet.memory.embeddings import EmbeddingService
     from signet.memory.store import MemoryStore
+    from signet.nightshift.research_store import ResearchStore
     from signet.nightshift.store import DreamStore
 
     log.info("signet.loading_character", path=str(settings.character_path))
@@ -59,9 +62,10 @@ def run() -> None:
         embedder=embedder,
     )
     dreams = DreamStore(database_url=settings.database_url, embedder=embedder)
+    research = ResearchStore(database_url=settings.database_url, embedder=embedder)
 
     console.print(f"[bold green]Starting {character.name}...[/bold green]")
-    run_discord_bot(assembler, brain, memory, wiki, dreams)
+    run_discord_bot(assembler, brain, memory, wiki, dreams, research)
 
 
 @app.command()
@@ -92,6 +96,7 @@ def db_init() -> None:
     from signet.knowledge.store import WikiStore
     from signet.memory.embeddings import EmbeddingService
     from signet.memory.store import MemoryStore
+    from signet.nightshift.research_store import ResearchStore
     from signet.nightshift.store import DreamStore
 
     async def _init() -> None:
@@ -103,19 +108,23 @@ def db_init() -> None:
             embedder=embedder,
         )
         dreams = DreamStore(database_url=settings.database_url, embedder=embedder)
+        research = ResearchStore(database_url=settings.database_url, embedder=embedder)
         await memory.connect()
         await memory.initialize_schema()
         await wiki.connect()
         await wiki.initialize_schema()
         await dreams.connect()
         await dreams.initialize_schema()
+        await research.connect()
+        await research.initialize_schema()
+        await research.close()
         await dreams.close()
         await wiki.close()
         await memory.close()
 
     console.print(f"[bold]Connecting to:[/bold] {settings.database_url.split('@')[-1]}")
     asyncio.run(_init())
-    console.print("[bold green]Database schema initialized (memory + wiki + dreams).[/bold green]")
+    console.print("[bold green]Database schema initialized (memory + wiki + dreams + research).[/bold green]")
 
 
 # ── Wiki subcommands ────────────────────────────────────────
@@ -395,6 +404,172 @@ def dream_list(
         table.add_row(d.dream_type.value, content, d.entity_name, created)
 
     console.print(table)
+
+
+# ── Nightshift subcommands ─────────────────────────────────
+
+
+@nightshift_app.command("run")
+def nightshift_run() -> None:
+    """Manually trigger a nightshift research session."""
+    import asyncio
+
+    structlog.configure(
+        processors=[structlog.dev.ConsoleRenderer()],
+        wrapper_class=structlog.make_filtering_bound_logger(20),
+    )
+
+    from signet.brain.client import Brain
+    from signet.knowledge.store import WikiStore
+    from signet.memory.embeddings import EmbeddingService
+    from signet.memory.store import MemoryStore
+    from signet.nightshift.research_store import ResearchStore
+    from signet.nightshift.researcher import Researcher
+    from signet.nightshift.store import DreamStore
+
+    async def _run():
+        embedder = EmbeddingService(model_name=settings.embedding_model)
+        memory = MemoryStore(database_url=settings.database_url, embedder=embedder)
+        wiki = WikiStore(
+            wikis_path=settings.wikis_path,
+            database_url=settings.database_url,
+            embedder=embedder,
+        )
+        dreams = DreamStore(database_url=settings.database_url, embedder=embedder)
+        research = ResearchStore(database_url=settings.database_url, embedder=embedder)
+        brain = Brain()
+
+        await memory.connect()
+        await wiki.connect()
+        await dreams.connect()
+        await research.connect()
+        await research.initialize_schema()
+
+        researcher = Researcher(brain, memory, wiki, dreams, research)
+        report = await researcher.run()
+
+        await research.close()
+        await dreams.close()
+        await wiki.close()
+        await memory.close()
+        return report
+
+    console.print("[bold]Starting nightshift research...[/bold]")
+    report = asyncio.run(_run())
+
+    if report.status.value == "completed":
+        console.print(
+            f"[green]Researched: {report.topic}[/green]\n"
+            f"[green]Sections: {report.sections_completed} | "
+            f"Tokens: {report.total_tokens:,} | "
+            f"Time: {report.duration_seconds:.0f}s[/green]"
+        )
+    else:
+        console.print(f"[yellow]Status: {report.status.value}[/yellow]")
+        if report.topic:
+            console.print(f"[dim]Topic: {report.topic}[/dim]")
+
+
+@nightshift_app.command("status")
+def nightshift_status() -> None:
+    """Show nightshift research status."""
+    import asyncio
+
+    from signet.memory.embeddings import EmbeddingService
+    from signet.nightshift.research_store import ResearchStore
+
+    async def _status():
+        embedder = EmbeddingService(model_name=settings.embedding_model)
+        store = ResearchStore(database_url=settings.database_url, embedder=embedder)
+        await store.connect()
+        await store.initialize_schema()
+
+        counts = await store.count_by_status()
+        tokens = await store.total_tokens_today()
+        queue_len = await store.queue_length()
+
+        await store.close()
+        return counts, tokens, queue_len
+
+    counts, tokens, queue_len = asyncio.run(_status())
+
+    console.print(f"[bold]Nightshift enabled:[/bold] {settings.nightshift_enabled}")
+    console.print(f"[bold]Channel:[/bold] {settings.nightshift_channel_id or '(not set)'}")
+    console.print(f"[bold]Queue:[/bold] {queue_len} pending")
+    console.print(f"[bold]Tokens today:[/bold] {tokens:,} / {settings.nightshift_daily_token_budget:,}")
+
+    if counts:
+        console.print("[bold]Research artifacts:[/bold]")
+        for status, cnt in sorted(counts.items()):
+            console.print(f"  {status}: {cnt}")
+
+
+@nightshift_app.command("list")
+def nightshift_list(
+    limit: int = typer.Option(10, help="Max results to show"),
+) -> None:
+    """List recent research artifacts."""
+    import asyncio
+
+    from signet.memory.embeddings import EmbeddingService
+    from signet.nightshift.research_store import ResearchStore
+
+    async def _list():
+        embedder = EmbeddingService(model_name=settings.embedding_model)
+        store = ResearchStore(database_url=settings.database_url, embedder=embedder)
+        await store.connect()
+        await store.initialize_schema()
+        results = await store.recent(limit=limit)
+        await store.close()
+        return results
+
+    artifacts = asyncio.run(_list())
+    if not artifacts:
+        console.print("[dim]No research yet.[/dim]")
+        return
+
+    table = Table(title="Recent Research")
+    table.add_column("Topic", max_width=40)
+    table.add_column("Status", style="cyan", width=12)
+    table.add_column("Sections", width=8)
+    table.add_column("Tokens", width=10)
+    table.add_column("Started", width=16)
+
+    for a in artifacts:
+        started = a.started_at.strftime("%Y-%m-%d %H:%M")
+        table.add_row(
+            a.topic[:40],
+            a.status.value,
+            str(len(a.sections)),
+            f"{a.token_count:,}",
+            started,
+        )
+
+    console.print(table)
+
+
+@nightshift_app.command("queue")
+def nightshift_queue(
+    topic: str = typer.Argument(..., help="Topic to research"),
+) -> None:
+    """Add a topic to the research queue."""
+    import asyncio
+
+    from signet.memory.embeddings import EmbeddingService
+    from signet.nightshift.research_store import ResearchStore
+
+    async def _queue():
+        embedder = EmbeddingService(model_name=settings.embedding_model)
+        store = ResearchStore(database_url=settings.database_url, embedder=embedder)
+        await store.connect()
+        await store.initialize_schema()
+        item_id = await store.enqueue(topic, requested_by="cli")
+        await store.close()
+        return item_id
+
+    item_id = asyncio.run(_queue())
+    console.print(f"[green]Queued:[/green] {topic}")
+    console.print(f"[dim]ID: {item_id}[/dim]")
 
 
 if __name__ == "__main__":

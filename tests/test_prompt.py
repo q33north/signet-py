@@ -39,20 +39,22 @@ class TestPromptAssemblerDreamContext:
 
         assert "internalized" not in prompt
 
-    def test_context_ordering_memory_then_dream_then_wiki(self):
+    def test_context_ordering_memory_dream_research_wiki(self):
         char = _minimal_character()
         assembler = PromptAssembler(char)
 
         prompt = assembler.build_system_prompt(
             memory_context="MEMORY_MARKER",
             dream_context="DREAM_MARKER",
+            research_context="RESEARCH_MARKER",
             wiki_context="WIKI_MARKER",
         )
 
         mem_pos = prompt.index("MEMORY_MARKER")
         dream_pos = prompt.index("DREAM_MARKER")
+        research_pos = prompt.index("RESEARCH_MARKER")
         wiki_pos = prompt.index("WIKI_MARKER")
-        assert mem_pos < dream_pos < wiki_pos
+        assert mem_pos < dream_pos < research_pos < wiki_pos
 
 
 class TestFormatDreamContext:

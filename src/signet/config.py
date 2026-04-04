@@ -34,6 +34,15 @@ class Settings(BaseSettings):
     # Dreams / autoDream
     dream_recall_limit: int = 3
 
+    # Nightshift autonomous research
+    nightshift_enabled: bool = False
+    nightshift_quiet_minutes: int = 30
+    nightshift_check_interval_minutes: int = 5
+    nightshift_channel_id: str = ""
+    nightshift_daily_token_budget: int = 100_000
+    nightshift_max_sections: int = 5
+    research_recall_limit: int = 3
+
     # Paths
     project_root: Path = Path(__file__).parent.parent.parent
     character_path: Path = Path(__file__).parent.parent.parent / "characters" / "signet.yaml"

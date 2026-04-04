@@ -1,6 +1,7 @@
 """Discord bot interface using discord.py."""
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 
 import discord
@@ -14,6 +15,9 @@ from signet.memory.store import MemoryStore
 from signet.models.dreams import DreamResult
 from signet.models.knowledge import WikiSearchResult
 from signet.models.memory import MemoryResult, Message, MessageRole
+from signet.models.research import ResearchResult
+from signet.nightshift.research_store import ResearchStore
+from signet.nightshift.researcher import Researcher, format_research_for_discord
 from signet.nightshift.store import DreamStore
 
 log = structlog.get_logger()
@@ -32,6 +36,7 @@ class SignetBot(discord.Client):
         memory: MemoryStore,
         wiki: WikiStore,
         dreams: DreamStore,
+        research: ResearchStore,
     ) -> None:
         intents = discord.Intents.default()
         intents.message_content = True
@@ -43,7 +48,11 @@ class SignetBot(discord.Client):
         self._memory = memory
         self._wiki = wiki
         self._dreams = dreams
+        self._research = research
         self._last_response: dict[int, datetime] = {}  # channel_id -> timestamp
+        self._last_activity: datetime = datetime.now(timezone.utc)
+        self._researcher: Researcher | None = None
+        self._nightshift_task: asyncio.Task | None = None
 
     async def setup_hook(self) -> None:
         """Called by discord.py after login, before events. Async init goes here."""
@@ -60,7 +69,26 @@ class SignetBot(discord.Client):
         await self._dreams.initialize_schema()
         log.info("discord.dreams_ready")
 
+        await self._research.connect()
+        await self._research.initialize_schema()
+        log.info("discord.research_ready")
+
+        # Start nightshift background loop if enabled
+        if settings.nightshift_enabled and settings.nightshift_channel_id:
+            self._researcher = Researcher(
+                brain=self._brain,
+                memory=self._memory,
+                wiki=self._wiki,
+                dreams=self._dreams,
+                research=self._research,
+            )
+            self._nightshift_task = asyncio.create_task(self._nightshift_loop())
+            log.info("discord.nightshift_started")
+
     async def close(self) -> None:
+        if self._nightshift_task and not self._nightshift_task.done():
+            self._nightshift_task.cancel()
+        await self._research.close()
         await self._dreams.close()
         await self._wiki.close()
         await self._memory.close()
@@ -72,6 +100,8 @@ class SignetBot(discord.Client):
     async def on_message(self, message: discord.Message) -> None:
         if message.author == self.user:
             return
+
+        self._last_activity = datetime.now(timezone.utc)
 
         content = message.content
         if self.user:
@@ -158,14 +188,22 @@ class SignetBot(discord.Client):
             limit=settings.dream_recall_limit,
         )
 
+        # Research recall (nightshift findings)
+        research_results = await self._research.recall(
+            query=content,
+            limit=settings.research_recall_limit,
+        )
+
         memory_context = _format_memories(memories) if memories else ""
         dream_context = _format_dream_context(dream_results) if dream_results else ""
+        research_context = _format_research_context(research_results) if research_results else ""
         wiki_context = _format_wiki_context(wiki_results) if wiki_results else ""
 
         system = self._assembler.build_system_prompt(
             platform="discord",
             memory_context=memory_context,
             dream_context=dream_context,
+            research_context=research_context,
             wiki_context=wiki_context,
         )
 
@@ -196,6 +234,42 @@ class SignetBot(discord.Client):
 
         self._last_response[channel_id] = datetime.now(timezone.utc)
         log.info("discord.response", channel=channel_id, length=len(response_text))
+
+    async def _nightshift_loop(self) -> None:
+        """Background loop that triggers research during quiet periods."""
+        interval = settings.nightshift_check_interval_minutes * 60
+        quiet_threshold = settings.nightshift_quiet_minutes * 60
+
+        while True:
+            try:
+                await asyncio.sleep(interval)
+
+                age = (datetime.now(timezone.utc) - self._last_activity).total_seconds()
+                if age < quiet_threshold:
+                    continue
+
+                log.info("nightshift.quiet_detected", idle_minutes=age / 60)
+
+                # Interrupt researcher if user comes back mid-research
+                report = await self._researcher.run()
+
+                if report.status.value == "completed":
+                    channel = self.get_channel(int(settings.nightshift_channel_id))
+                    if channel:
+                        # Fetch the latest completed research for formatting
+                        recent = await self._research.recent(limit=1)
+                        if recent:
+                            text = format_research_for_discord(recent[0])
+                            for chunk in _split_message(text):
+                                await channel.send(chunk)
+                            log.info("nightshift.posted", topic=report.topic)
+
+            except asyncio.CancelledError:
+                log.info("nightshift.cancelled")
+                break
+            except Exception:
+                log.exception("nightshift.loop_error")
+                await asyncio.sleep(60)
 
 
 def _format_memories(memories: list[MemoryResult]) -> str:
@@ -232,6 +306,19 @@ def _format_dream_context(results: list[DreamResult]) -> str:
         lines.append(f"- [{prefix}] {r.dream.content[:300]}")
 
     header = "Things you've internalized from past experience (use naturally, these are YOUR thoughts):"
+    return header + "\n" + "\n".join(lines)
+
+
+def _format_research_context(results: list[ResearchResult]) -> str:
+    """Format research artifacts as context for the system prompt."""
+    lines = []
+    for r in results:
+        a = r.artifact
+        lines.append(f"- [Research: {a.topic}] {a.synthesis[:300]}")
+        if a.open_questions:
+            lines.append(f"  Open questions: {'; '.join(a.open_questions[:3])}")
+
+    header = "Research you've done recently (reference naturally when relevant):"
     return header + "\n" + "\n".join(lines)
 
 
@@ -279,7 +366,8 @@ def run_discord_bot(
     memory: MemoryStore,
     wiki: WikiStore,
     dreams: DreamStore,
+    research: ResearchStore,
 ) -> None:
     """Start the Discord bot. Blocks until shutdown."""
-    bot = SignetBot(assembler, brain, memory, wiki, dreams)
+    bot = SignetBot(assembler, brain, memory, wiki, dreams, research)
     bot.run(settings.discord_token, log_handler=None)
