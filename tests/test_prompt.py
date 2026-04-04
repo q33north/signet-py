@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from signet.character.prompt import PromptAssembler
-from signet.interfaces.discord import _format_dream_context
+from signet.core.responder import format_dream_context as _format_dream_context
 from signet.models.character import Character, StyleDirectives
 from signet.models.dreams import Dream, DreamResult, DreamType
 

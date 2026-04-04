@@ -34,6 +34,15 @@ class Settings(BaseSettings):
     # Dreams / autoDream
     dream_recall_limit: int = 3
 
+    # Filesystem access (tool use)
+    allowed_paths: list[Path] = [
+        Path.home() / "Q33North",
+        Path.home() / "Code",
+        Path.home() / "Projects",
+    ]
+    tools_enabled: bool = True
+    tool_max_iterations: int = 10  # max tool use round-trips per response
+
     # Nightshift autonomous research
     nightshift_enabled: bool = False
     nightshift_quiet_minutes: int = 30
