@@ -213,3 +213,67 @@ class MemoryStore:
                 session_id,
             )
         log.info("memory.session_ended", session_id=str(session_id))
+
+    # ── Dream support ──────────────────────────────────────────
+
+    async def get_unconsolidated_messages(
+        self,
+        *,
+        limit: int = 500,
+        min_age_hours: float = 2.0,
+    ) -> list[Message]:
+        """Fetch messages not yet processed by autoDream.
+
+        Only returns messages older than min_age_hours to avoid
+        consolidating active conversations.
+        """
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT id, session_id, role, content, platform, channel_id,
+                       author_id, author_name, timestamp
+                FROM messages
+                WHERE consolidated = FALSE
+                  AND timestamp < now() - make_interval(hours => $1)
+                ORDER BY timestamp ASC
+                LIMIT $2
+                """,
+                min_age_hours,
+                limit,
+            )
+
+        return [
+            Message(
+                id=row["id"],
+                session_id=row["session_id"],
+                role=MessageRole(row["role"]),
+                content=row["content"],
+                platform=row["platform"],
+                channel_id=row["channel_id"],
+                author_id=row["author_id"],
+                author_name=row["author_name"],
+                timestamp=row["timestamp"],
+            )
+            for row in rows
+        ]
+
+    async def mark_messages_consolidated(self, message_ids: list[UUID]) -> int:
+        """Mark messages as consolidated. Returns count updated."""
+        if not message_ids:
+            return 0
+        async with self._pool.acquire() as conn:
+            result = await conn.execute(
+                "UPDATE messages SET consolidated = TRUE WHERE id = ANY($1)",
+                message_ids,
+            )
+        count = int(result.split()[-1])
+        log.info("memory.marked_consolidated", count=count)
+        return count
+
+    async def unconsolidated_count(self) -> int:
+        """Count messages awaiting consolidation."""
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT COUNT(*) AS cnt FROM messages WHERE consolidated = FALSE"
+            )
+        return row["cnt"]

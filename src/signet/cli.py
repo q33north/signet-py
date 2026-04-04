@@ -10,7 +10,9 @@ from signet.config import settings
 
 app = typer.Typer(help="Signet: persistent AI research agent")
 wiki_app = typer.Typer(help="Wiki knowledge management")
+dream_app = typer.Typer(help="autoDream memory consolidation")
 app.add_typer(wiki_app, name="wiki")
+app.add_typer(dream_app, name="dream")
 console = Console()
 
 
@@ -41,6 +43,7 @@ def run() -> None:
     from signet.knowledge.store import WikiStore
     from signet.memory.embeddings import EmbeddingService
     from signet.memory.store import MemoryStore
+    from signet.nightshift.store import DreamStore
 
     log.info("signet.loading_character", path=str(settings.character_path))
     character = load_character(settings.character_path)
@@ -55,9 +58,10 @@ def run() -> None:
         database_url=settings.database_url,
         embedder=embedder,
     )
+    dreams = DreamStore(database_url=settings.database_url, embedder=embedder)
 
     console.print(f"[bold green]Starting {character.name}...[/bold green]")
-    run_discord_bot(assembler, brain, memory, wiki)
+    run_discord_bot(assembler, brain, memory, wiki, dreams)
 
 
 @app.command()
@@ -88,6 +92,7 @@ def db_init() -> None:
     from signet.knowledge.store import WikiStore
     from signet.memory.embeddings import EmbeddingService
     from signet.memory.store import MemoryStore
+    from signet.nightshift.store import DreamStore
 
     async def _init() -> None:
         embedder = EmbeddingService(model_name=settings.embedding_model)
@@ -97,16 +102,20 @@ def db_init() -> None:
             database_url=settings.database_url,
             embedder=embedder,
         )
+        dreams = DreamStore(database_url=settings.database_url, embedder=embedder)
         await memory.connect()
         await memory.initialize_schema()
         await wiki.connect()
         await wiki.initialize_schema()
+        await dreams.connect()
+        await dreams.initialize_schema()
+        await dreams.close()
         await wiki.close()
         await memory.close()
 
     console.print(f"[bold]Connecting to:[/bold] {settings.database_url.split('@')[-1]}")
     asyncio.run(_init())
-    console.print("[bold green]Database schema initialized (memory + wiki).[/bold green]")
+    console.print("[bold green]Database schema initialized (memory + wiki + dreams).[/bold green]")
 
 
 # ── Wiki subcommands ────────────────────────────────────────
@@ -249,6 +258,143 @@ def ingest(force: bool = typer.Option(False, "--force", help="Re-convert even if
             f"[green]added={sync_result['added']} updated={sync_result['updated']} "
             f"removed={sync_result['removed']}[/green]"
         )
+
+
+# ── Dream subcommands ──────────────────────────────────────
+
+
+@dream_app.command("run")
+def dream_run(
+    max_messages: int = typer.Option(500, help="Max messages to process per run"),
+) -> None:
+    """Run autoDream memory consolidation now."""
+    import asyncio
+
+    structlog.configure(
+        processors=[structlog.dev.ConsoleRenderer()],
+        wrapper_class=structlog.make_filtering_bound_logger(20),
+    )
+
+    from signet.brain.client import Brain
+    from signet.memory.embeddings import EmbeddingService
+    from signet.memory.store import MemoryStore
+    from signet.nightshift.dreamer import Dreamer
+    from signet.nightshift.store import DreamStore
+
+    async def _dream():
+        embedder = EmbeddingService(model_name=settings.embedding_model)
+        memory = MemoryStore(database_url=settings.database_url, embedder=embedder)
+        dreams = DreamStore(database_url=settings.database_url, embedder=embedder)
+        brain = Brain()
+
+        await memory.connect()
+        await dreams.connect()
+        await dreams.initialize_schema()
+
+        dreamer = Dreamer(memory=memory, dreams=dreams, brain=brain)
+        report = await dreamer.dream(max_messages=max_messages)
+
+        await dreams.close()
+        await memory.close()
+        return report
+
+    console.print("[bold]Starting autoDream consolidation...[/bold]")
+    report = asyncio.run(_dream())
+
+    if report.total_dreams == 0:
+        console.print("[dim]Nothing to consolidate.[/dim]")
+    else:
+        console.print(
+            f"[green]Processed {report.messages_processed} messages "
+            f"across {report.sessions_processed} conversations[/green]"
+        )
+        console.print(
+            f"[green]Produced: {report.digests} digests, "
+            f"{report.entity_facts} entity facts, "
+            f"{report.reflections} reflections[/green]"
+        )
+
+
+@dream_app.command("status")
+def dream_status() -> None:
+    """Show dream consolidation status."""
+    import asyncio
+
+    from signet.memory.embeddings import EmbeddingService
+    from signet.memory.store import MemoryStore
+    from signet.nightshift.store import DreamStore
+
+    async def _status():
+        embedder = EmbeddingService(model_name=settings.embedding_model)
+        memory = MemoryStore(database_url=settings.database_url, embedder=embedder)
+        dreams = DreamStore(database_url=settings.database_url, embedder=embedder)
+        await memory.connect()
+        await dreams.connect()
+        await dreams.initialize_schema()
+
+        pending = await memory.unconsolidated_count()
+        last = await dreams.last_dream_time()
+        counts = await dreams.count_by_type()
+
+        await dreams.close()
+        await memory.close()
+        return pending, last, counts
+
+    pending, last, counts = asyncio.run(_status())
+
+    console.print(f"[bold]Messages awaiting consolidation:[/bold] {pending}")
+    if last:
+        console.print(f"[bold]Last dream run:[/bold] {last.strftime('%Y-%m-%d %H:%M UTC')}")
+    else:
+        console.print("[dim]No dreams yet.[/dim]")
+
+    if counts:
+        total = sum(counts.values())
+        console.print(f"[bold]Total dreams:[/bold] {total}")
+        for dtype, cnt in sorted(counts.items()):
+            console.print(f"  {dtype}: {cnt}")
+
+
+@dream_app.command("list")
+def dream_list(
+    limit: int = typer.Option(20, help="Max dreams to show"),
+    dtype: str = typer.Option("", "--type", help="Filter by type: digest, entity_fact, reflection"),
+) -> None:
+    """List recent dream artifacts."""
+    import asyncio
+
+    from signet.models.dreams import DreamType
+    from signet.nightshift.store import DreamStore
+    from signet.memory.embeddings import EmbeddingService
+
+    dream_type = DreamType(dtype) if dtype else None
+
+    async def _list():
+        embedder = EmbeddingService(model_name=settings.embedding_model)
+        store = DreamStore(database_url=settings.database_url, embedder=embedder)
+        await store.connect()
+        await store.initialize_schema()
+        results = await store.recent(limit=limit, dream_type=dream_type)
+        await store.close()
+        return results
+
+    dreams = asyncio.run(_list())
+    if not dreams:
+        console.print("[dim]No dreams yet.[/dim]")
+        return
+
+    table = Table(title="Recent Dreams")
+    table.add_column("Type", style="cyan", width=12)
+    table.add_column("Content", max_width=80)
+    table.add_column("Entity", style="dim", width=15)
+    table.add_column("Created", width=16)
+
+    for d in dreams:
+        content = d.content[:80] + "..." if len(d.content) > 80 else d.content
+        created = d.created_at.strftime("%Y-%m-%d %H:%M")
+        table.add_row(d.dream_type.value, content, d.entity_name, created)
+
+    console.print(table)
 
 
 if __name__ == "__main__":

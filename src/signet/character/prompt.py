@@ -16,6 +16,7 @@ class PromptAssembler:
         self,
         platform: str = "discord",
         memory_context: str = "",
+        dream_context: str = "",
         wiki_context: str = "",
     ) -> str:
         """Build a system prompt with randomized personality slices.
@@ -43,7 +44,11 @@ class PromptAssembler:
         if memory_context:
             parts.append(memory_context)
 
-        # 4b. Wiki knowledge context (relevant domain knowledge)
+        # 4b. Dream context (consolidated insights from past experience)
+        if dream_context:
+            parts.append(dream_context)
+
+        # 4c. Wiki knowledge context (relevant domain knowledge)
         if wiki_context:
             parts.append(wiki_context)
 

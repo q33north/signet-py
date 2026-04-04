@@ -11,12 +11,15 @@ from signet.character.prompt import PromptAssembler
 from signet.config import settings
 from signet.knowledge.store import WikiStore
 from signet.memory.store import MemoryStore
+from signet.models.dreams import DreamResult
 from signet.models.knowledge import WikiSearchResult
 from signet.models.memory import MemoryResult, Message, MessageRole
+from signet.nightshift.store import DreamStore
 
 log = structlog.get_logger()
 
 MAX_HISTORY = 20
+CONVERSATION_TIMEOUT = 120  # seconds - stay engaged for 2 min after last response
 
 
 class SignetBot(discord.Client):
@@ -28,6 +31,7 @@ class SignetBot(discord.Client):
         brain: Brain,
         memory: MemoryStore,
         wiki: WikiStore,
+        dreams: DreamStore,
     ) -> None:
         intents = discord.Intents.default()
         intents.message_content = True
@@ -38,6 +42,8 @@ class SignetBot(discord.Client):
         self._brain = brain
         self._memory = memory
         self._wiki = wiki
+        self._dreams = dreams
+        self._last_response: dict[int, datetime] = {}  # channel_id -> timestamp
 
     async def setup_hook(self) -> None:
         """Called by discord.py after login, before events. Async init goes here."""
@@ -50,7 +56,12 @@ class SignetBot(discord.Client):
         await self._wiki.sync()
         log.info("discord.wiki_ready")
 
+        await self._dreams.connect()
+        await self._dreams.initialize_schema()
+        log.info("discord.dreams_ready")
+
     async def close(self) -> None:
+        await self._dreams.close()
         await self._wiki.close()
         await self._memory.close()
         await super().close()
@@ -65,6 +76,18 @@ class SignetBot(discord.Client):
         content = message.content
         if self.user:
             content = content.replace(f"<@{self.user.id}>", "").strip()
+
+        # Read text file attachments (pasted files, .txt, .tsv, .csv, etc.)
+        for att in message.attachments:
+            if att.content_type and att.content_type.startswith("text/"):
+                try:
+                    file_bytes = await att.read()
+                    file_text = file_bytes.decode("utf-8", errors="replace")
+                    label = f"\n[attached file: {att.filename}]\n{file_text}"
+                    content = f"{content}\n{label}" if content else label
+                    log.info("discord.attachment_read", filename=att.filename, size=len(file_text))
+                except Exception:
+                    log.exception("discord.attachment_error", filename=att.filename)
 
         if not content:
             return
@@ -98,8 +121,14 @@ class SignetBot(discord.Client):
         )
         await self._memory.store_message(incoming)
 
+        # Is she already in conversation with this channel?
+        in_conversation = False
+        if channel_id in self._last_response:
+            age = (datetime.now(timezone.utc) - self._last_response[channel_id]).total_seconds()
+            in_conversation = age < CONVERSATION_TIMEOUT
+
         # Decide whether to respond
-        should_respond = is_dm or is_mentioned or role_mentioned or name_mentioned
+        should_respond = is_dm or is_mentioned or role_mentioned or name_mentioned or in_conversation
         if not should_respond:
             log.debug("discord.listening", channel=channel_id, author=author_name)
             return
@@ -123,12 +152,20 @@ class SignetBot(discord.Client):
             min_similarity=settings.wiki_min_similarity,
         )
 
+        # Dream recall (consolidated insights from past experience)
+        dream_results = await self._dreams.recall(
+            query=content,
+            limit=settings.dream_recall_limit,
+        )
+
         memory_context = _format_memories(memories) if memories else ""
+        dream_context = _format_dream_context(dream_results) if dream_results else ""
         wiki_context = _format_wiki_context(wiki_results) if wiki_results else ""
 
         system = self._assembler.build_system_prompt(
             platform="discord",
             memory_context=memory_context,
+            dream_context=dream_context,
             wiki_context=wiki_context,
         )
 
@@ -157,6 +194,7 @@ class SignetBot(discord.Client):
         for chunk in _split_message(response_text):
             await message.channel.send(chunk)
 
+        self._last_response[channel_id] = datetime.now(timezone.utc)
         log.info("discord.response", channel=channel_id, length=len(response_text))
 
 
@@ -178,6 +216,22 @@ def _format_memories(memories: list[MemoryResult]) -> str:
         lines.append(f"- [{time_str}] {author}: {content}")
 
     header = "Relevant things from past conversations (use naturally, don't force references):"
+    return header + "\n" + "\n".join(lines)
+
+
+def _format_dream_context(results: list[DreamResult]) -> str:
+    """Format dream artifacts as context for the system prompt."""
+    prefixes = {
+        "digest": "Past conversation",
+        "entity_fact": "You know",
+        "reflection": "You've noticed",
+    }
+    lines = []
+    for r in results:
+        prefix = prefixes.get(r.dream.dream_type.value, "Memory")
+        lines.append(f"- [{prefix}] {r.dream.content[:300]}")
+
+    header = "Things you've internalized from past experience (use naturally, these are YOUR thoughts):"
     return header + "\n" + "\n".join(lines)
 
 
@@ -224,7 +278,8 @@ def run_discord_bot(
     brain: Brain,
     memory: MemoryStore,
     wiki: WikiStore,
+    dreams: DreamStore,
 ) -> None:
     """Start the Discord bot. Blocks until shutdown."""
-    bot = SignetBot(assembler, brain, memory, wiki)
+    bot = SignetBot(assembler, brain, memory, wiki, dreams)
     bot.run(settings.discord_token, log_handler=None)
