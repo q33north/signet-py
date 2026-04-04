@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     discord_application_id: str = ""
 
     # Model routing
-    model_light: str = "claude-haiku-4-5-20251001"
+    model_light: str = "claude-sonnet-4-6-20250514"
     model_heavy: str = "claude-sonnet-4-6"
     model_deep: str = "claude-opus-4-6"  # requires user confirmation
 
