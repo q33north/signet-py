@@ -89,8 +89,8 @@ Rules:
 - Suggest concrete next steps
 - Keep it readable - this isn't a journal article
 - Do NOT fabricate anything
-
-You must return valid JSON. Nothing else."""
+- Output plain markdown using the section markers below. Do NOT wrap in JSON \
+or code fences."""
 
 SYNTHESIS_PROMPT = """\
 Topic: {topic}
@@ -99,10 +99,20 @@ Angle: {angle}
 Section findings:
 {section_findings}
 
-Synthesize these findings into a final research report. Return JSON:
-{{
-  "synthesis": "your cohesive writeup combining all findings",
-  "confidence": "overall confidence: high/medium/low/speculative",
-  "open_questions": ["question 1", "question 2"],
-  "suggested_next": ["concrete next step 1", "concrete next step 2"]
-}}"""
+Synthesize these findings into a final research report. Output EXACTLY in \
+this format (plain text, no JSON, no outer code fences):
+
+===SYNTHESIS===
+<your cohesive markdown writeup combining all findings>
+
+===CONFIDENCE===
+<one of: high | medium | low | speculative>
+
+===OPEN_QUESTIONS===
+- <question 1>
+- <question 2>
+
+===NEXT_STEPS===
+- <concrete next step 1>
+- <concrete next step 2>
+"""

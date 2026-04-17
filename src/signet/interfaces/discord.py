@@ -21,7 +21,7 @@ from signet.nightshift.store import DreamStore
 log = structlog.get_logger()
 
 MAX_HISTORY = 20
-CONVERSATION_TIMEOUT = 120  # seconds - stay engaged for 2 min after last response
+CONVERSATION_TIMEOUT = 600  # seconds - stay engaged for 10 min after last response
 
 
 class SignetBot(discord.Client):
@@ -201,9 +201,22 @@ class SignetBot(discord.Client):
                 if age < quiet_threshold:
                     continue
 
+                # Check session cap before burning API calls on topic selection
+                sessions_today = await self._research.count_sessions_today()
+                if sessions_today >= settings.nightshift_max_sessions:
+                    log.info(
+                        "nightshift.session_limit_reached",
+                        sessions_today=sessions_today,
+                    )
+                    continue
+
                 log.info("nightshift.quiet_detected", idle_minutes=age / 60)
 
                 report = await self._researcher.run()
+
+                # Reset activity timer so we wait the full quiet period again
+                # before starting another research run
+                self._last_activity = datetime.now(timezone.utc)
 
                 if report.status.value == "completed":
                     channel = self.get_channel(int(settings.nightshift_channel_id))

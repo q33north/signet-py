@@ -232,7 +232,7 @@ def search(query: str, limit: int = 5) -> None:
 
 @wiki_app.command()
 def ingest(force: bool = typer.Option(False, "--force", help="Re-convert even if .md exists")) -> None:
-    """Convert PDFs in raw/ directories to markdown via Docling."""
+    """Convert documents (PDF, PPTX, DOCX) in raw/ directories to markdown via Docling."""
     import asyncio
 
     from signet.knowledge.ingest import ingest_raw
@@ -529,6 +529,7 @@ def nightshift_list(
         return
 
     table = Table(title="Recent Research")
+    table.add_column("ID", style="dim", no_wrap=True)
     table.add_column("Topic", max_width=40)
     table.add_column("Status", style="cyan", width=12)
     table.add_column("Sections", width=8)
@@ -538,6 +539,7 @@ def nightshift_list(
     for a in artifacts:
         started = a.started_at.strftime("%Y-%m-%d %H:%M")
         table.add_row(
+            str(a.id),
             a.topic[:40],
             a.status.value,
             str(len(a.sections)),
@@ -570,6 +572,100 @@ def nightshift_queue(
     item_id = asyncio.run(_queue())
     console.print(f"[green]Queued:[/green] {topic}")
     console.print(f"[dim]ID: {item_id}[/dim]")
+
+
+@nightshift_app.command("repost")
+def nightshift_repost(
+    artifact_id: str = typer.Option(
+        "", "--id", help="Artifact UUID. Defaults to most recent completed."
+    ),
+    topic: str = typer.Option(
+        "", "--topic", help="Case-insensitive topic substring match."
+    ),
+    channel_id: str = typer.Option(
+        "", "--channel", help="Discord channel ID. Defaults to nightshift_channel_id."
+    ),
+) -> None:
+    """Re-post a stored research artifact to Discord."""
+    import asyncio
+    from uuid import UUID
+
+    import discord
+
+    from signet.interfaces.discord import _split_message
+    from signet.memory.embeddings import EmbeddingService
+    from signet.nightshift.research_store import ResearchStore
+    from signet.nightshift.researcher import format_research_for_discord
+    from signet.models.research import ResearchStatus
+
+    target_channel = channel_id or settings.nightshift_channel_id
+    if not target_channel:
+        console.print("[red]No channel. Pass --channel or set nightshift_channel_id.[/red]")
+        raise typer.Exit(1)
+    if not settings.discord_token:
+        console.print("[red]DISCORD_TOKEN not set.[/red]")
+        raise typer.Exit(1)
+
+    async def _load():
+        embedder = EmbeddingService(model_name=settings.embedding_model)
+        store = ResearchStore(database_url=settings.database_url, embedder=embedder)
+        await store.connect()
+        await store.initialize_schema()
+        try:
+            if artifact_id:
+                artifact = await store.get(UUID(artifact_id))
+                return artifact, []
+            if topic:
+                recent = await store.recent(limit=50)
+                needle = topic.lower()
+                matches = [a for a in recent if needle in a.topic.lower()]
+                if len(matches) == 1:
+                    return matches[0], []
+                return None, matches
+            recent = await store.recent(limit=1, status=ResearchStatus.COMPLETED)
+            return (recent[0] if recent else None), []
+        finally:
+            await store.close()
+
+    artifact, ambiguous = asyncio.run(_load())
+    if ambiguous:
+        console.print(f"[yellow]Topic matched {len(ambiguous)} artifacts:[/yellow]")
+        for a in ambiguous:
+            console.print(f"  {a.id}  {a.topic[:70]}")
+        console.print("[yellow]Narrow the --topic substring or use --id.[/yellow]")
+        raise typer.Exit(1)
+
+    if not artifact:
+        console.print("[red]No artifact found.[/red]")
+        raise typer.Exit(1)
+    if not artifact.synthesis:
+        console.print("[red]Artifact has no synthesis. Run repair script first.[/red]")
+        raise typer.Exit(1)
+
+    text = format_research_for_discord(artifact)
+    chunks = _split_message(text)
+
+    async def _send():
+        intents = discord.Intents.default()
+        client = discord.Client(intents=intents)
+
+        @client.event
+        async def on_ready():
+            try:
+                channel = client.get_channel(int(target_channel))
+                if channel is None:
+                    channel = await client.fetch_channel(int(target_channel))
+                for chunk in chunks:
+                    await channel.send(chunk)
+                console.print(
+                    f"[green]Posted {len(chunks)} chunk(s) for:[/green] {artifact.topic}"
+                )
+            finally:
+                await client.close()
+
+        await client.start(settings.discord_token)
+
+    asyncio.run(_send())
 
 
 if __name__ == "__main__":

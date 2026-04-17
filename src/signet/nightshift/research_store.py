@@ -226,19 +226,16 @@ class ResearchStore:
             return None
         return row["id"], row["topic"]
 
-    async def consume_queue_item(
-        self, queue_id: UUID, research_id: UUID
-    ) -> None:
-        """Mark a queue item as consumed and link to its research artifact."""
+    async def consume_queue_item(self, queue_id: UUID) -> None:
+        """Mark a queue item as consumed."""
         async with self._pool.acquire() as conn:
             await conn.execute(
                 """
                 UPDATE research_queue
-                SET consumed = TRUE, consumed_at = now(), research_id = $2
+                SET consumed = TRUE, consumed_at = now()
                 WHERE id = $1
                 """,
                 queue_id,
-                research_id,
             )
 
     async def queue_length(self) -> int:
@@ -270,6 +267,18 @@ class ResearchStore:
                 """
             )
         return row["total"]
+
+    async def count_sessions_today(self) -> int:
+        """Count research sessions started today (any status)."""
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT COUNT(*) AS cnt
+                FROM research
+                WHERE started_at >= CURRENT_DATE
+                """
+            )
+        return row["cnt"]
 
 
 def _row_to_artifact(row) -> ResearchArtifact:

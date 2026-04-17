@@ -42,6 +42,7 @@ def _mock_stores():
     dreams.recall.return_value = []
     research.recall.return_value = []
     research.total_tokens_today.return_value = 0
+    research.count_sessions_today.return_value = 0
     research.next_queued.return_value = None
 
     return memory, wiki, dreams, research
@@ -54,13 +55,14 @@ class TestPickTopic:
             quick_response=json.dumps({"sub_questions": ["what about it?"]}),
         )
         memory, wiki, dreams, research = _mock_stores()
-        research.next_queued.return_value = (uuid4(), "BRCA2 variants")
+        queue_id = uuid4()
+        research.next_queued.return_value = (queue_id, "BRCA2 variants")
 
         researcher = Researcher(brain, memory, wiki, dreams, research)
         topic, angle = await researcher._pick_topic()
 
         assert topic == "BRCA2 variants"
-        research.consume_queue_item.assert_called_once()
+        research.consume_queue_item.assert_called_once_with(queue_id)
 
     @pytest.mark.asyncio
     async def test_llm_selection_from_candidates(self):
@@ -96,6 +98,56 @@ class TestPickTopic:
 
         assert topic == ""
         assert angle == ""
+
+    @pytest.mark.asyncio
+    async def test_already_researched_topics_excluded_from_candidates(self):
+        """Topics with completed research should not appear as candidates."""
+        brain = _mock_brain(
+            quick_response=json.dumps({
+                "topic": "TP53",
+                "angle": "gain of function",
+                "why": "only remaining candidate",
+            }),
+        )
+        memory, wiki, dreams, research = _mock_stores()
+
+        # Two dream candidates: KRAS (already done) and TP53 (new)
+        dreams.recall.return_value = [
+            DreamResult(
+                dream=Dream(
+                    dream_type=DreamType.ENTITY_FACT,
+                    content="KRAS G12C resistance",
+                    entity_name="KRAS",
+                ),
+                similarity=0.9,
+            ),
+            DreamResult(
+                dream=Dream(
+                    dream_type=DreamType.ENTITY_FACT,
+                    content="TP53 gain of function",
+                    entity_name="TP53",
+                ),
+                similarity=0.8,
+            ),
+        ]
+
+        # KRAS was already researched
+        already_done = ResearchArtifact(
+            topic="KRAS",
+            status=ResearchStatus.COMPLETED,
+        )
+        research.recent.return_value = [already_done]
+
+        researcher = Researcher(brain, memory, wiki, dreams, research)
+        topic, angle = await researcher._pick_topic()
+
+        # KRAS should have been filtered out, only TP53 remains
+        assert topic == "TP53"
+        # Verify the prompt sent to the LLM only contains TP53
+        call_args = brain.quick.call_args
+        prompt_text = call_args[0][0]
+        assert "TP53" in prompt_text
+        assert "KRAS" not in prompt_text.split("Already researched")[0]
 
 
 class TestPlan:
@@ -153,13 +205,17 @@ class TestPlan:
 
 class TestSynthesize:
     @pytest.mark.asyncio
-    async def test_synthesis_parses_json_response(self):
-        synthesis_response = json.dumps({
-            "synthesis": "KRAS G12C shows differential resistance patterns...",
-            "confidence": "high",
-            "open_questions": ["does this extend to NSCLC?"],
-            "suggested_next": ["check COSMIC database"],
-        })
+    async def test_synthesis_parses_labeled_response(self):
+        synthesis_response = (
+            "===SYNTHESIS===\n"
+            "KRAS G12C shows differential resistance patterns...\n\n"
+            "===CONFIDENCE===\n"
+            "high\n\n"
+            "===OPEN_QUESTIONS===\n"
+            "- does this extend to NSCLC?\n\n"
+            "===NEXT_STEPS===\n"
+            "- check COSMIC database\n"
+        )
         brain = _mock_brain(chat_response=synthesis_response)
         memory, wiki, dreams, research = _mock_stores()
 
@@ -195,6 +251,31 @@ class TestSynthesize:
         assert result.synthesis == "raw synthesis text here"
         assert result.confidence == "medium"
 
+    @pytest.mark.asyncio
+    async def test_synthesis_parses_json_when_model_ignores_markers(self):
+        json_response = json.dumps({
+            "synthesis": "## ALK+ NSCLC\n\nHost-response proteins dominate.",
+            "confidence": "medium",
+            "open_questions": ["tumor-specific signal?"],
+            "suggested_next": ["expand reference cohort"],
+        })
+        brain = _mock_brain(chat_response=json_response)
+        memory, wiki, dreams, research = _mock_stores()
+
+        researcher = Researcher(brain, memory, wiki, dreams, research)
+
+        artifact = ResearchArtifact(
+            topic="ALK proteomics",
+            sections=[ResearchSection(question="q1", findings="f1")],
+        )
+        result = await researcher._synthesize(artifact)
+
+        assert result.synthesis.startswith("## ALK+ NSCLC")
+        assert "{" not in result.synthesis
+        assert result.confidence == "medium"
+        assert result.open_questions == ["tumor-specific signal?"]
+        assert result.suggested_next == ["expand reference cohort"]
+
 
 class TestInterruption:
     @pytest.mark.asyncio
@@ -229,12 +310,55 @@ class TestBudget:
         brain = _mock_brain()
         memory, wiki, dreams, research = _mock_stores()
         research.total_tokens_today.return_value = 999_999
+        research.count_sessions_today.return_value = 0
 
         researcher = Researcher(brain, memory, wiki, dreams, research)
         report = await researcher.run()
 
         assert report.status == ResearchStatus.FAILED
         research.save.assert_not_called()
+
+
+class TestSessionLimit:
+    @pytest.mark.asyncio
+    async def test_session_limit_reached_skips_research(self):
+        brain = _mock_brain()
+        memory, wiki, dreams, research = _mock_stores()
+        research.count_sessions_today.return_value = 3
+
+        researcher = Researcher(brain, memory, wiki, dreams, research)
+        with patch("signet.nightshift.researcher.settings") as mock_settings:
+            mock_settings.nightshift_max_sessions = 3
+            mock_settings.nightshift_daily_token_budget = 100_000
+            report = await researcher.run()
+
+        assert report.status == ResearchStatus.FAILED
+        research.save.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_under_session_limit_allows_research(self):
+        brain = _mock_brain(
+            quick_response=json.dumps({
+                "topic": "TP53",
+                "angle": "gain of function",
+                "why": "testing",
+                "sub_questions": ["q1?"],
+            }),
+            chat_response=(
+                "===SYNTHESIS===\nfindings here\n\n"
+                "===CONFIDENCE===\nmedium\n\n"
+                "===OPEN_QUESTIONS===\n\n"
+                "===NEXT_STEPS===\n"
+            ),
+        )
+        memory, wiki, dreams, research = _mock_stores()
+        research.count_sessions_today.return_value = 1
+        research.next_queued.return_value = (uuid4(), "TP53")
+
+        researcher = Researcher(brain, memory, wiki, dreams, research)
+        report = await researcher.run()
+
+        assert report.status == ResearchStatus.COMPLETED
 
 
 class TestFormatDiscord:

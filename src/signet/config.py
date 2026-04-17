@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     discord_application_id: str = ""
 
     # Model routing
-    model_light: str = "claude-sonnet-4-6-20250514"
+    model_light: str = "claude-sonnet-4-6"
     model_heavy: str = "claude-sonnet-4-6"
     model_deep: str = "claude-opus-4-6"  # requires user confirmation
 
@@ -49,6 +49,7 @@ class Settings(BaseSettings):
     nightshift_check_interval_minutes: int = 5
     nightshift_channel_id: str = ""
     nightshift_daily_token_budget: int = 100_000
+    nightshift_max_sessions: int = 3
     nightshift_max_sections: int = 5
     research_recall_limit: int = 3
 
