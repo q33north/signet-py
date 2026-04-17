@@ -21,7 +21,7 @@ src/signet/
   character/      # YAML loader, personality sampler, prompt assembler
   memory/         # PostgreSQL + pgvector message store with semantic recall
   knowledge/      # Wiki articles + PDF ingestion pipeline
-  nightshift/     # autoDream consolidation + (future) autonomous research
+  nightshift/     # autoDream consolidation + autonomous research + wiki writeback
   interfaces/     # Discord bot
   models/         # Pydantic models (memory, knowledge, dreams)
   providers/      # (placeholder) external service integrations
@@ -41,6 +41,9 @@ uv run signet wiki ingest      # Convert PDFs to markdown
 uv run signet dream run        # Run autoDream consolidation
 uv run signet dream status     # Show consolidation status
 uv run signet dream list       # Show recent dream artifacts
+uv run signet nightshift run   # Manual research trigger
+uv run signet nightshift list  # Show recent research artifacts
+uv run signet nightshift queue # Add topic to research queue
 ```
 
 ## Phases
@@ -49,7 +52,8 @@ uv run signet dream list       # Show recent dream artifacts
 2. ~~Memory persistence~~ (done)
 3. ~~autoDream memory consolidation~~ (done)
 4. ~~Wiki/knowledge system + PDF ingestion~~ (done)
-5. Nightshift plugin - autonomous overnight research (next, the product)
+5. ~~Nightshift autonomous research~~ (done)
+6. ~~Research-to-wiki writeback (Karpathy loop)~~ (done)
 
 ## Success Criteria
 
@@ -57,7 +61,7 @@ uv run signet dream list       # Show recent dream artifacts
 - Memory: all messages stored with embeddings, semantic recall works cross-channel
 - Wiki: articles sync from disk, PDF ingestion produces valid markdown, semantic search returns relevant results
 - autoDream: consolidation produces digests, entity facts, and reflections; dreams recalled in live prompts
-- Nightshift: (TBD) agent initiates research autonomously during quiet periods
+- Nightshift: autonomous research during quiet periods, writes findings back to wiki as markdown, auto-syncs to DB for future context
 - Tests: all modules have test coverage, `uv run pytest` passes before every commit
 
 ## Constraints
@@ -67,6 +71,8 @@ uv run signet dream list       # Show recent dream artifacts
 - autoDream uses Haiku (model_light) to keep consolidation costs low
 - Embedding model runs locally on CPU/GPU, not via API
 - Character personality is defined in YAML, not code
+- Wiki lives on Google Drive (`WIKIS_PATH` env var), mounted via rclone at `~/gdrive/Mina-blade18/signet-wiki/`
+- Research -> wiki -> DB -> future research: the knowledge loop must stay closed
 
 ## Git Rules
 
