@@ -56,13 +56,29 @@ class TestPickTopic:
         )
         memory, wiki, dreams, research = _mock_stores()
         queue_id = uuid4()
-        research.next_queued.return_value = (queue_id, "BRCA2 variants")
+        research.next_queued.return_value = (queue_id, "BRCA2 variants", "")
 
         researcher = Researcher(brain, memory, wiki, dreams, research)
-        topic, angle = await researcher._pick_topic()
+        topic, angle, wiki_folder = await researcher._pick_topic()
 
         assert topic == "BRCA2 variants"
+        assert wiki_folder == ""
         research.consume_queue_item.assert_called_once_with(queue_id)
+
+    @pytest.mark.asyncio
+    async def test_queued_topic_passes_wiki_folder(self):
+        brain = _mock_brain(
+            quick_response=json.dumps({"sub_questions": ["what about it?"]}),
+        )
+        memory, wiki, dreams, research = _mock_stores()
+        queue_id = uuid4()
+        research.next_queued.return_value = (queue_id, "KRAS resistance", "cancer_genomics")
+
+        researcher = Researcher(brain, memory, wiki, dreams, research)
+        topic, angle, wiki_folder = await researcher._pick_topic()
+
+        assert topic == "KRAS resistance"
+        assert wiki_folder == "cancer_genomics"
 
     @pytest.mark.asyncio
     async def test_llm_selection_from_candidates(self):
@@ -83,10 +99,11 @@ class TestPickTopic:
         dreams.recall.return_value = [DreamResult(dream=dream, similarity=0.8)]
 
         researcher = Researcher(brain, memory, wiki, dreams, research)
-        topic, angle = await researcher._pick_topic()
+        topic, angle, wiki_folder = await researcher._pick_topic()
 
         assert topic == "KRAS G12C"
         assert angle == "resistance mechanisms"
+        assert wiki_folder == ""
 
     @pytest.mark.asyncio
     async def test_no_candidates_returns_empty(self):
@@ -94,7 +111,7 @@ class TestPickTopic:
         memory, wiki, dreams, research = _mock_stores()
 
         researcher = Researcher(brain, memory, wiki, dreams, research)
-        topic, angle = await researcher._pick_topic()
+        topic, angle, wiki_folder = await researcher._pick_topic()
 
         assert topic == ""
         assert angle == ""
@@ -139,7 +156,7 @@ class TestPickTopic:
         research.recent.return_value = [already_done]
 
         researcher = Researcher(brain, memory, wiki, dreams, research)
-        topic, angle = await researcher._pick_topic()
+        topic, angle, wiki_folder = await researcher._pick_topic()
 
         # KRAS should have been filtered out, only TP53 remains
         assert topic == "TP53"
@@ -285,7 +302,7 @@ class TestInterruption:
             chat_response="findings",
         )
         memory, wiki, dreams, research = _mock_stores()
-        research.next_queued.return_value = (uuid4(), "test topic")
+        research.next_queued.return_value = (uuid4(), "test topic", "")
 
         researcher = Researcher(brain, memory, wiki, dreams, research)
 
@@ -353,7 +370,8 @@ class TestSessionLimit:
         )
         memory, wiki, dreams, research = _mock_stores()
         research.count_sessions_today.return_value = 1
-        research.next_queued.return_value = (uuid4(), "TP53")
+        research.next_queued.return_value = (uuid4(), "TP53", "")
+        wiki.sync.return_value = {"added": 1, "updated": 0, "removed": 0}
 
         researcher = Researcher(brain, memory, wiki, dreams, research)
         report = await researcher.run()

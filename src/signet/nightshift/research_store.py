@@ -195,28 +195,31 @@ class ResearchStore:
 
     # ── Queue management ───────────────────────────────────
 
-    async def enqueue(self, topic: str, requested_by: str = "") -> UUID:
+    async def enqueue(
+        self, topic: str, requested_by: str = "", wiki_folder: str = ""
+    ) -> UUID:
         """Add a topic to the research queue. Returns queue item ID."""
         item_id = uuid4()
         async with self._pool.acquire() as conn:
             await conn.execute(
                 """
-                INSERT INTO research_queue (id, topic, requested_by)
-                VALUES ($1, $2, $3)
+                INSERT INTO research_queue (id, topic, requested_by, wiki_folder)
+                VALUES ($1, $2, $3, $4)
                 """,
                 item_id,
                 topic,
                 requested_by,
+                wiki_folder,
             )
-        log.info("research.queued", topic=topic, id=str(item_id))
+        log.info("research.queued", topic=topic, wiki_folder=wiki_folder, id=str(item_id))
         return item_id
 
-    async def next_queued(self) -> tuple[UUID, str] | None:
-        """Pop the next unconsumed queue item. Returns (id, topic) or None."""
+    async def next_queued(self) -> tuple[UUID, str, str] | None:
+        """Pop the next unconsumed queue item. Returns (id, topic, wiki_folder) or None."""
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
-                SELECT id, topic FROM research_queue
+                SELECT id, topic, wiki_folder FROM research_queue
                 WHERE consumed = FALSE
                 ORDER BY requested_at ASC
                 LIMIT 1
@@ -224,7 +227,7 @@ class ResearchStore:
             )
         if not row:
             return None
-        return row["id"], row["topic"]
+        return row["id"], row["topic"], row["wiki_folder"]
 
     async def consume_queue_item(self, queue_id: UUID) -> None:
         """Mark a queue item as consumed."""

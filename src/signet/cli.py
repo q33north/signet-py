@@ -553,6 +553,9 @@ def nightshift_list(
 @nightshift_app.command("queue")
 def nightshift_queue(
     topic: str = typer.Argument(..., help="Topic to research"),
+    folder: str = typer.Option(
+        "", "--folder", "-f", help="Wiki subfolder to file results into (e.g. cancer_genomics)"
+    ),
 ) -> None:
     """Add a topic to the research queue."""
     import asyncio
@@ -565,12 +568,14 @@ def nightshift_queue(
         store = ResearchStore(database_url=settings.database_url, embedder=embedder)
         await store.connect()
         await store.initialize_schema()
-        item_id = await store.enqueue(topic, requested_by="cli")
+        item_id = await store.enqueue(topic, requested_by="cli", wiki_folder=folder)
         await store.close()
         return item_id
 
     item_id = asyncio.run(_queue())
     console.print(f"[green]Queued:[/green] {topic}")
+    if folder:
+        console.print(f"[green]Wiki folder:[/green] {folder}")
     console.print(f"[dim]ID: {item_id}[/dim]")
 
 

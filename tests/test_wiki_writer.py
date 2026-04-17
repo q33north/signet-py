@@ -265,6 +265,31 @@ class TestWriteArtifactToWiki:
         assert "  - cancer" in content
         assert "  - nightshift" in content
 
+    def test_wiki_folder_overrides_topic_slug(self, tmp_path: Path):
+        artifact = ResearchArtifact(
+            topic="KRAS G12C Resistance",
+            angle="sotorasib bypass mechanisms",
+            synthesis="Findings about bypass",
+            wiki_folder="cancer_genomics",
+        )
+
+        result = write_artifact_to_wiki(artifact, tmp_path)
+
+        # Should use the explicit folder, not the slugified topic
+        assert result.parent.name == "cancer_genomics"
+        assert (tmp_path / "cancer_genomics").is_dir()
+
+    def test_empty_wiki_folder_falls_back_to_topic(self, tmp_path: Path):
+        artifact = ResearchArtifact(
+            topic="Proteomics Methods",
+            synthesis="Findings",
+            wiki_folder="",
+        )
+
+        result = write_artifact_to_wiki(artifact, tmp_path)
+
+        assert result.parent.name == "proteomics-methods"
+
 
 class TestUpdateTopicIndex:
     def test_creates_index_from_articles(self, tmp_path: Path):

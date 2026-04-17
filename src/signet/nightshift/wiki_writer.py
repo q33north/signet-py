@@ -132,8 +132,8 @@ def write_artifact_to_wiki(
 
     Creates the topic directory if needed. Returns the path to the written file.
     """
-    # Determine topic directory
-    topic_slug = topic_dir_name(artifact.topic)
+    # Determine topic directory: explicit folder wins, otherwise slugify topic
+    topic_slug = artifact.wiki_folder if artifact.wiki_folder else topic_dir_name(artifact.topic)
     topic_path = wikis_path / topic_slug
     topic_path.mkdir(parents=True, exist_ok=True)
 

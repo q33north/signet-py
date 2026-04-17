@@ -89,7 +89,7 @@ class Researcher:
             return ResearchReport(status=ResearchStatus.FAILED)
 
         # Pick a topic
-        topic, angle = await self._pick_topic()
+        topic, angle, wiki_folder = await self._pick_topic()
         if not topic:
             log.info("research.no_topic")
             return ResearchReport(status=ResearchStatus.FAILED)
@@ -98,6 +98,7 @@ class Researcher:
         artifact = ResearchArtifact(
             topic=topic,
             angle=angle,
+            wiki_folder=wiki_folder,
             status=ResearchStatus.IN_PROGRESS,
             model_used=settings.model_heavy,
         )
@@ -145,21 +146,25 @@ class Researcher:
             await self._research.save(artifact)
             return self._make_report(artifact, start)
 
-    async def _pick_topic(self) -> tuple[str, str]:
-        """Select the best research topic from available candidates."""
+    async def _pick_topic(self) -> tuple[str, str, str]:
+        """Select the best research topic from available candidates.
+
+        Returns (topic, angle, wiki_folder). wiki_folder is only set for
+        explicitly queued topics that specified a folder.
+        """
         # Priority 1: explicit queue
         queued = await self._research.next_queued()
         if queued:
-            queue_id, topic = queued
+            queue_id, topic, wiki_folder = queued
             # Use LLM to refine the angle
             angle = await self._refine_angle(topic)
             await self._research.consume_queue_item(queue_id)
-            return topic, angle
+            return topic, angle, wiki_folder
 
         # Gather candidates from multiple sources
         candidates = await self._gather_candidates()
         if not candidates:
-            return "", ""
+            return "", "", ""
 
         # Fetch recently completed topics so the LLM avoids them
         already_done = []
@@ -190,11 +195,11 @@ class Researcher:
             topic = data.get("topic", "")
             angle = data.get("angle", "")
             log.info("research.topic_selected", topic=topic, angle=angle)
-            return topic, angle
+            return topic, angle, ""
         except (json.JSONDecodeError, KeyError):
             log.warning("research.topic_selection_failed", raw=raw[:200])
             # Fallback: use first candidate
-            return candidates[0], ""
+            return candidates[0], "", ""
 
     async def _refine_angle(self, topic: str) -> str:
         """Given a broad topic, generate a specific research angle."""

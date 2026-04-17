@@ -38,8 +38,15 @@ CREATE TABLE IF NOT EXISTS research_queue (
     requested_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
     consumed            BOOLEAN NOT NULL DEFAULT FALSE,
     consumed_at         TIMESTAMPTZ,
-    research_id         UUID REFERENCES research(id)
+    research_id         UUID REFERENCES research(id),
+    wiki_folder         TEXT NOT NULL DEFAULT ''
 );
+
+-- Idempotent column addition for existing databases
+DO $$ BEGIN
+    ALTER TABLE research_queue ADD COLUMN wiki_folder TEXT NOT NULL DEFAULT '';
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
 
 CREATE INDEX IF NOT EXISTS idx_research_queue_pending
     ON research_queue (requested_at ASC) WHERE consumed = FALSE;
