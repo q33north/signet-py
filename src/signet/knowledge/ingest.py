@@ -1,4 +1,4 @@
-"""Ingest raw PDFs into wiki markdown articles via Docling."""
+"""Ingest raw documents (PDF, PPTX, DOCX) into wiki markdown articles via Docling."""
 from __future__ import annotations
 
 import re
@@ -34,23 +34,29 @@ source: docling
 """
 
 
-def _convert_pdf(pdf_path: Path) -> str:
-    """Convert a single PDF to markdown using Docling."""
+SUPPORTED_EXTENSIONS = ("*.pdf", "*.pptx", "*.docx")
+
+
+def _convert_document(file_path: Path) -> str:
+    """Convert a single document to markdown using Docling."""
     from docling.document_converter import DocumentConverter
 
     converter = DocumentConverter()
-    result = converter.convert(str(pdf_path))
+    result = converter.convert(str(file_path))
     return result.document.export_to_markdown()
 
 
 def ingest_raw(wikis_path: Path, *, force: bool = False) -> dict[str, int]:
-    """Scan all raw/ subdirectories for PDFs and convert to markdown.
+    """Scan all raw/ subdirectories for supported documents and convert to markdown.
 
     Returns counts of converted, skipped, and errored files.
     """
     converted = 0
     skipped = 0
     errored = 0
+
+    if not wikis_path.exists():
+        return {"converted": 0, "skipped": 0, "errored": 0}
 
     for topic_dir in sorted(wikis_path.iterdir()):
         if not topic_dir.is_dir():
@@ -61,15 +67,17 @@ def ingest_raw(wikis_path: Path, *, force: bool = False) -> dict[str, int]:
             continue
 
         topic = topic_dir.name
-        pdfs = sorted(raw_dir.glob("*.pdf"))
+        files = sorted(
+            f for ext in SUPPORTED_EXTENSIONS for f in raw_dir.glob(ext)
+        )
 
-        if not pdfs:
+        if not files:
             continue
 
-        log.info("ingest.scanning", topic=topic, pdfs=len(pdfs))
+        log.info("ingest.scanning", topic=topic, files=len(files))
 
-        for pdf_path in pdfs:
-            slug = _slugify(pdf_path.stem)
+        for file_path in files:
+            slug = _slugify(file_path.stem)
             output_path = topic_dir / f"{slug}.md"
 
             if output_path.exists() and not force:
@@ -77,16 +85,16 @@ def ingest_raw(wikis_path: Path, *, force: bool = False) -> dict[str, int]:
                 skipped += 1
                 continue
 
-            log.info("ingest.converting", pdf=pdf_path.name, topic=topic)
+            log.info("ingest.converting", file=file_path.name, topic=topic)
 
             try:
-                body = _convert_pdf(pdf_path)
+                body = _convert_document(file_path)
             except Exception:
-                log.exception("ingest.error", pdf=pdf_path.name)
+                log.exception("ingest.error", file=file_path.name)
                 errored += 1
                 continue
 
-            title = pdf_path.stem.replace("_", " ").replace("-", " ").title()
+            title = file_path.stem.replace("_", " ").replace("-", " ").title()
             frontmatter = _make_frontmatter(title, tags=[topic])
             output_path.write_text(frontmatter + body, encoding="utf-8")
 

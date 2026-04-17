@@ -30,6 +30,8 @@ def parse_article(file_path: Path, wikis_root: Path) -> WikiArticle:
 
 def scan_articles(wikis_path: Path) -> list[WikiArticle]:
     """Scan all .md files in wikis_path, skipping _-prefixed files."""
+    if not wikis_path.exists():
+        return []
     articles = []
     for md_file in sorted(wikis_path.glob("**/*.md")):
         if md_file.name.startswith("_"):

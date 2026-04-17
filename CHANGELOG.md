@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-04-17
+
+### Research-to-wiki writeback (Karpathy loop)
+- Nightshift research now writes completed artifacts back to the wiki as markdown files with proper YAML frontmatter
+- Closes the knowledge loop: research -> wiki markdown -> DB embeddings -> future research context
+- New `wiki_writer.py` module handles article generation, slug creation, frontmatter building, and per-topic `_index.md` maintenance
+- Researcher pipeline gains Step 4: after synthesis, write to wiki and auto-sync to DB
+- Wiki path is configurable via `WIKIS_PATH` env var for mounting on Google Drive or other shared locations
+- Safety guards: `scan_articles` and `ingest_raw` gracefully handle missing wiki directories
+- 27 new tests covering slug generation, frontmatter, article creation/update, index generation, and researcher integration
+- 133 total tests passing
+
 ## 2026-04-03
 
 ### Phase 1: Core chat (fdf8c61)
