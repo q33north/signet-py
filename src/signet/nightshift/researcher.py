@@ -89,7 +89,7 @@ class Researcher:
             return ResearchReport(status=ResearchStatus.FAILED)
 
         # Pick a topic
-        topic, angle, wiki_folder = await self._pick_topic()
+        topic, angle, wiki_folder, brief = await self._pick_topic()
         if not topic:
             log.info("research.no_topic")
             return ResearchReport(status=ResearchStatus.FAILED)
@@ -99,6 +99,7 @@ class Researcher:
             topic=topic,
             angle=angle,
             wiki_folder=wiki_folder,
+            brief=brief,
             status=ResearchStatus.IN_PROGRESS,
             model_used=settings.model_heavy,
         )
@@ -146,25 +147,25 @@ class Researcher:
             await self._research.save(artifact)
             return self._make_report(artifact, start)
 
-    async def _pick_topic(self) -> tuple[str, str, str]:
+    async def _pick_topic(self) -> tuple[str, str, str, str]:
         """Select the best research topic from available candidates.
 
-        Returns (topic, angle, wiki_folder). wiki_folder is only set for
-        explicitly queued topics that specified a folder.
+        Returns (topic, angle, wiki_folder, brief). wiki_folder and brief
+        are only set for explicitly queued topics.
         """
         # Priority 1: explicit queue
         queued = await self._research.next_queued()
         if queued:
-            queue_id, topic, wiki_folder = queued
-            # Use LLM to refine the angle
-            angle = await self._refine_angle(topic)
+            queue_id, topic, wiki_folder, brief = queued
+            # Use LLM to refine the angle, informed by brief if available
+            angle = await self._refine_angle(topic, brief=brief)
             await self._research.consume_queue_item(queue_id)
-            return topic, angle, wiki_folder
+            return topic, angle, wiki_folder, brief
 
         # Gather candidates from multiple sources
         candidates = await self._gather_candidates()
         if not candidates:
-            return "", "", ""
+            return "", "", "", ""
 
         # Fetch recently completed topics so the LLM avoids them
         already_done = []
@@ -195,15 +196,15 @@ class Researcher:
             topic = data.get("topic", "")
             angle = data.get("angle", "")
             log.info("research.topic_selected", topic=topic, angle=angle)
-            return topic, angle, ""
+            return topic, angle, "", ""
         except (json.JSONDecodeError, KeyError):
             log.warning("research.topic_selection_failed", raw=raw[:200])
             # Fallback: use first candidate
-            return candidates[0], "", ""
+            return candidates[0], "", "", ""
 
-    async def _refine_angle(self, topic: str) -> str:
+    async def _refine_angle(self, topic: str, *, brief: str = "") -> str:
         """Given a broad topic, generate a specific research angle."""
-        context = await self._gather_context(topic)
+        context = await self._gather_context(topic, brief=brief)
         prompt = RESEARCH_PLAN_PROMPT.format(
             topic=topic, angle="(to be determined)", context=context
         )
@@ -261,9 +262,13 @@ class Researcher:
 
         return candidates
 
-    async def _gather_context(self, topic: str) -> str:
+    async def _gather_context(self, topic: str, *, brief: str = "") -> str:
         """Pull existing knowledge relevant to a topic."""
         parts = []
+
+        # Research brief (highest priority context - user-provided direction)
+        if brief:
+            parts.append(f"[Research Brief]\n{brief}")
 
         # Wiki context - pass substantial body content so the researcher
         # can actually use ingested PDFs and articles
@@ -303,7 +308,7 @@ class Researcher:
 
     async def _plan(self, artifact: ResearchArtifact) -> ResearchArtifact:
         """Step 1: Generate a research plan with sub-questions."""
-        context = await self._gather_context(artifact.topic)
+        context = await self._gather_context(artifact.topic, brief=artifact.brief)
 
         prompt = RESEARCH_PLAN_PROMPT.format(
             topic=artifact.topic,

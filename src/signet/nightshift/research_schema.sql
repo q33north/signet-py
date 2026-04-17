@@ -39,12 +39,18 @@ CREATE TABLE IF NOT EXISTS research_queue (
     consumed            BOOLEAN NOT NULL DEFAULT FALSE,
     consumed_at         TIMESTAMPTZ,
     research_id         UUID REFERENCES research(id),
-    wiki_folder         TEXT NOT NULL DEFAULT ''
+    wiki_folder         TEXT NOT NULL DEFAULT '',
+    brief               TEXT NOT NULL DEFAULT ''
 );
 
--- Idempotent column addition for existing databases
+-- Idempotent column additions for existing databases
 DO $$ BEGIN
     ALTER TABLE research_queue ADD COLUMN wiki_folder TEXT NOT NULL DEFAULT '';
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
+
+DO $$ BEGIN
+    ALTER TABLE research_queue ADD COLUMN brief TEXT NOT NULL DEFAULT '';
 EXCEPTION WHEN duplicate_column THEN NULL;
 END $$;
 

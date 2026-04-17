@@ -196,30 +196,35 @@ class ResearchStore:
     # ── Queue management ───────────────────────────────────
 
     async def enqueue(
-        self, topic: str, requested_by: str = "", wiki_folder: str = ""
+        self,
+        topic: str,
+        requested_by: str = "",
+        wiki_folder: str = "",
+        brief: str = "",
     ) -> UUID:
         """Add a topic to the research queue. Returns queue item ID."""
         item_id = uuid4()
         async with self._pool.acquire() as conn:
             await conn.execute(
                 """
-                INSERT INTO research_queue (id, topic, requested_by, wiki_folder)
-                VALUES ($1, $2, $3, $4)
+                INSERT INTO research_queue (id, topic, requested_by, wiki_folder, brief)
+                VALUES ($1, $2, $3, $4, $5)
                 """,
                 item_id,
                 topic,
                 requested_by,
                 wiki_folder,
+                brief,
             )
         log.info("research.queued", topic=topic, wiki_folder=wiki_folder, id=str(item_id))
         return item_id
 
-    async def next_queued(self) -> tuple[UUID, str, str] | None:
-        """Pop the next unconsumed queue item. Returns (id, topic, wiki_folder) or None."""
+    async def next_queued(self) -> tuple[UUID, str, str, str] | None:
+        """Pop the next unconsumed queue item. Returns (id, topic, wiki_folder, brief) or None."""
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
-                SELECT id, topic, wiki_folder FROM research_queue
+                SELECT id, topic, wiki_folder, brief FROM research_queue
                 WHERE consumed = FALSE
                 ORDER BY requested_at ASC
                 LIMIT 1
@@ -227,7 +232,7 @@ class ResearchStore:
             )
         if not row:
             return None
-        return row["id"], row["topic"], row["wiki_folder"]
+        return row["id"], row["topic"], row["wiki_folder"], row["brief"]
 
     async def consume_queue_item(self, queue_id: UUID) -> None:
         """Mark a queue item as consumed."""

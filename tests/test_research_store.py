@@ -215,14 +215,17 @@ class TestResearchStoreQueue:
         embedder = AsyncMock()
 
         qid = uuid4()
-        conn.fetchrow.return_value = {"id": qid, "topic": "BRCA2 variants", "wiki_folder": "cancer_genomics"}
+        conn.fetchrow.return_value = {
+            "id": qid, "topic": "BRCA2 variants",
+            "wiki_folder": "cancer_genomics", "brief": "investigate this",
+        }
 
         store = ResearchStore(database_url="fake://", embedder=embedder)
         store._pool = pool
 
         result = await store.next_queued()
 
-        assert result == (qid, "BRCA2 variants", "cancer_genomics")
+        assert result == (qid, "BRCA2 variants", "cancer_genomics", "investigate this")
 
     @pytest.mark.asyncio
     async def test_next_queued_returns_none_when_empty(self):

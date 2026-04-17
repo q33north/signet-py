@@ -556,19 +556,37 @@ def nightshift_queue(
     folder: str = typer.Option(
         "", "--folder", "-f", help="Wiki subfolder to file results into (e.g. cancer_genomics)"
     ),
+    brief: str = typer.Option(
+        "",
+        "--brief",
+        "-b",
+        help="Path to a markdown file with detailed research brief",
+    ),
 ) -> None:
     """Add a topic to the research queue."""
     import asyncio
+    from pathlib import Path
 
     from signet.memory.embeddings import EmbeddingService
     from signet.nightshift.research_store import ResearchStore
+
+    brief_text = ""
+    if brief:
+        brief_path = Path(brief).expanduser().resolve()
+        if not brief_path.exists():
+            console.print(f"[red]Brief file not found:[/red] {brief_path}")
+            raise typer.Exit(code=1)
+        brief_text = brief_path.read_text(encoding="utf-8")
+        console.print(f"[green]Brief loaded:[/green] {brief_path.name} ({len(brief_text)} chars)")
 
     async def _queue():
         embedder = EmbeddingService(model_name=settings.embedding_model)
         store = ResearchStore(database_url=settings.database_url, embedder=embedder)
         await store.connect()
         await store.initialize_schema()
-        item_id = await store.enqueue(topic, requested_by="cli", wiki_folder=folder)
+        item_id = await store.enqueue(
+            topic, requested_by="cli", wiki_folder=folder, brief=brief_text
+        )
         await store.close()
         return item_id
 

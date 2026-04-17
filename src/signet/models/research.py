@@ -42,6 +42,7 @@ class ResearchArtifact(BaseModel):
     token_count: int = 0
     tags: list[str] = Field(default_factory=list)
     wiki_folder: str = ""  # explicit wiki subdirectory override (e.g. "cancer_genomics")
+    brief: str = ""        # research brief providing detailed context and direction
     started_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     completed_at: datetime | None = None
 
