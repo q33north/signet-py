@@ -128,13 +128,16 @@ Autonomous research engine. Runs during quiet Discord periods or on-demand. Sele
 | `signet nightshift run` | Manually trigger a research session |
 | `signet nightshift status` | Show daily token budget, session count, queue status |
 | `signet nightshift list` | List recent research artifacts with UUIDs |
-| `signet nightshift queue TOPIC [-f FOLDER]` | Add topic to research queue, optionally specifying wiki folder |
+| `signet nightshift queue TOPIC [-f FOLDER] [-b BRIEF]` | Add topic to research queue with optional wiki folder and research brief |
 | `signet nightshift repost [--id UUID] [--topic STR] [--channel ID]` | Re-post research to Discord |
 
 Examples:
 ```bash
 # Queue research into an existing wiki folder
 signet nightshift queue "KRAS G12C resistance mechanisms" -f cancer_genomics
+
+# Queue with a detailed research brief (markdown file with goals, references, constraints)
+signet nightshift queue "Agentic AI for cancer labs" -f agentic-cancer-lab -b brief.md
 
 # Queue research (creates new wiki folder from topic name)
 signet nightshift queue "transformer architectures for protein structure"
