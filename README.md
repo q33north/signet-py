@@ -149,6 +149,19 @@ signet nightshift repost --topic proteomics
 signet nightshift repost --id abc123 --channel 1234567890
 ```
 
+### Tools
+
+In live conversation Signet can invoke tools via the Anthropic tool-use API when she decides they're needed. No user syntax required — just mention a URL, paper, or file and she reaches for the right one.
+
+| Tool | What it does |
+|------|--------------|
+| `fetch_url` | Fetch a web page and extract readable text. GitHub URLs (`blob/...` and bare repo URLs) are rewritten to `raw.githubusercontent.com` so she reads source/README, not the JS-rendered UI. |
+| `pubmed_search` | Search PubMed and return titles, abstracts, authors, DOIs, PMC IDs. |
+| `biorxiv_search` | Keyword search over recent bioRxiv preprints (last N days). |
+| `read_file` / `list_directory` / `search_files` / `file_info` | Filesystem access, sandboxed to `ALLOWED_PATHS`. |
+
+Toggle tools globally with `TOOLS_ENABLED=false` in `.env`. Web tools require no API keys.
+
 ## Wiki on Google Drive
 
 The wiki directory can be pointed at any filesystem path via the `WIKIS_PATH` environment variable. To make the wiki accessible from multiple machines, mount Google Drive with [rclone](https://rclone.org/):

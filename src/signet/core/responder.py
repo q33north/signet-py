@@ -20,7 +20,7 @@ from signet.models.memory import MemoryResult, Message, MessageRole
 from signet.models.research import ResearchResult
 from signet.nightshift.research_store import ResearchStore
 from signet.nightshift.store import DreamStore
-from signet.tools.filesystem import TOOL_DEFINITIONS, execute_tool
+from signet.tools import TOOL_DEFINITIONS, execute_tool
 
 log = structlog.get_logger()
 
