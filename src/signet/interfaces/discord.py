@@ -106,17 +106,13 @@ class SignetBot(discord.Client):
         if self.user:
             content = content.replace(f"<@{self.user.id}>", "").strip()
 
-        # Read text file attachments (pasted files, .txt, .tsv, .csv, etc.)
+        # Read attachments — text files inline, documents (PDF/DOCX/PPTX) via Docling.
         for att in message.attachments:
-            if att.content_type and att.content_type.startswith("text/"):
-                try:
-                    file_bytes = await att.read()
-                    file_text = file_bytes.decode("utf-8", errors="replace")
-                    label = f"\n[attached file: {att.filename}]\n{file_text}"
-                    content = f"{content}\n{label}" if content else label
-                    log.info("discord.attachment_read", filename=att.filename, size=len(file_text))
-                except Exception:
-                    log.exception("discord.attachment_error", filename=att.filename)
+            file_text = await _read_attachment(att)
+            if file_text:
+                label = f"\n[attached file: {att.filename}]\n{file_text}"
+                content = f"{content}\n{label}" if content else label
+                log.info("discord.attachment_read", filename=att.filename, size=len(file_text))
 
         if not content:
             return
@@ -234,6 +230,70 @@ class SignetBot(discord.Client):
             except Exception:
                 log.exception("nightshift.loop_error")
                 await asyncio.sleep(60)
+
+
+_DOC_CONTENT_TYPES = {
+    "application/pdf": ".pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+    "application/msword": ".docx",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
+    "application/vnd.ms-powerpoint": ".pptx",
+}
+_MAX_ATTACHMENT_BYTES = 20_000_000  # 20 MB cap for document conversion
+
+
+def _doc_suffix_for_attachment(att: discord.Attachment) -> str | None:
+    if att.content_type:
+        ct = att.content_type.lower().split(";", 1)[0].strip()
+        if ct in _DOC_CONTENT_TYPES:
+            return _DOC_CONTENT_TYPES[ct]
+    name = (att.filename or "").lower()
+    for ext in (".pdf", ".docx", ".pptx"):
+        if name.endswith(ext):
+            return ext
+    return None
+
+
+async def _read_attachment(att: discord.Attachment) -> str | None:
+    """Return readable text from a Discord attachment, or None if unsupported."""
+    if att.content_type and att.content_type.startswith("text/"):
+        try:
+            data = await att.read()
+            return data.decode("utf-8", errors="replace")
+        except Exception:
+            log.exception("discord.attachment_error", filename=att.filename)
+            return None
+
+    suffix = _doc_suffix_for_attachment(att)
+    if suffix:
+        if att.size and att.size > _MAX_ATTACHMENT_BYTES:
+            log.warning(
+                "discord.attachment_too_large",
+                filename=att.filename,
+                bytes=att.size,
+            )
+            return None
+        try:
+            data = await att.read()
+        except Exception:
+            log.exception("discord.attachment_error", filename=att.filename)
+            return None
+
+        from signet.knowledge.ingest import convert_bytes_to_markdown
+
+        try:
+            return await asyncio.to_thread(
+                convert_bytes_to_markdown, data, suffix=suffix
+            )
+        except Exception:
+            log.exception(
+                "discord.attachment_convert_error",
+                filename=att.filename,
+                suffix=suffix,
+            )
+            return None
+
+    return None
 
 
 def _split_message(text: str, limit: int = 2000) -> list[str]:

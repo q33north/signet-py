@@ -2,12 +2,29 @@
 from __future__ import annotations
 
 import re
+import tempfile
 from datetime import date
 from pathlib import Path
 
 import structlog
 
 log = structlog.get_logger()
+
+
+def convert_bytes_to_markdown(content: bytes, *, suffix: str) -> str:
+    """Convert raw document bytes to markdown via Docling.
+
+    Writes to a temp file since Docling's API takes a path. suffix must start
+    with '.' (e.g. '.pdf', '.docx', '.pptx') so Docling picks the right parser.
+    """
+    from docling.document_converter import DocumentConverter
+
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=True) as tmp:
+        tmp.write(content)
+        tmp.flush()
+        converter = DocumentConverter()
+        result = converter.convert(tmp.name)
+        return result.document.export_to_markdown()
 
 
 def _slugify(name: str) -> str:
@@ -39,11 +56,7 @@ SUPPORTED_EXTENSIONS = ("*.pdf", "*.pptx", "*.docx")
 
 def _convert_document(file_path: Path) -> str:
     """Convert a single document to markdown using Docling."""
-    from docling.document_converter import DocumentConverter
-
-    converter = DocumentConverter()
-    result = converter.convert(str(file_path))
-    return result.document.export_to_markdown()
+    return convert_bytes_to_markdown(file_path.read_bytes(), suffix=file_path.suffix)
 
 
 def ingest_raw(wikis_path: Path, *, force: bool = False) -> dict[str, int]:
