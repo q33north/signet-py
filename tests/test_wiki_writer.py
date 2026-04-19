@@ -17,6 +17,8 @@ from signet.models.research import (
     ResearchStatus,
 )
 from signet.nightshift.wiki_writer import (
+    _build_summary,
+    _parse_frontmatter_quick,
     build_article_body,
     build_frontmatter,
     slugify,
@@ -331,6 +333,83 @@ class TestUpdateTopicIndex:
         content = (tmp_path / "_index.md").read_text()
         assert "1 articles" in content
         assert "no-fm" in content  # falls back to filename
+
+
+class TestBuildSummary:
+    def _artifact(self, synthesis: str, topic: str = "T", angle: str = "a") -> ResearchArtifact:
+        return ResearchArtifact(
+            topic=topic,
+            angle=angle,
+            synthesis=synthesis,
+            status=ResearchStatus.COMPLETED,
+        )
+
+    def test_skips_horizontal_rule(self):
+        synthesis = "# Heading\n\n---\n\nActual first sentence of the writeup."
+        assert _build_summary(self._artifact(synthesis)) == "Actual first sentence of the writeup."
+
+    def test_skips_multiple_separator_styles(self):
+        synthesis = "---\n===\n***\n\nReal content here."
+        assert _build_summary(self._artifact(synthesis)) == "Real content here."
+
+    def test_falls_back_to_angle_when_only_separators(self):
+        synthesis = "# A\n## B\n---\n===\n"
+        out = _build_summary(self._artifact(synthesis, angle="fallback angle"))
+        assert out == "fallback angle"
+
+    def test_truncates_long_line(self):
+        long = "x" * 400
+        out = _build_summary(self._artifact(long))
+        assert len(out) <= 200
+        assert out.endswith("...")
+
+
+class TestParseFrontmatterQuick:
+    def test_handles_triple_dash_in_quoted_value(self):
+        """A summary value of '---' must not trick the frontmatter splitter."""
+        text = (
+            '---\n'
+            'title: "Some title"\n'
+            'summary: "---"\n'
+            'confidence: low\n'
+            '---\n\n'
+            'Body content here.\n'
+        )
+        fm = _parse_frontmatter_quick(text)
+        assert fm.get("title") == "Some title"
+        assert fm.get("summary") == "---"
+        assert fm.get("confidence") == "low"
+
+    def test_missing_frontmatter_returns_empty(self):
+        assert _parse_frontmatter_quick("just a body") == {}
+
+    def test_malformed_yaml_returns_empty(self):
+        text = '---\ntitle: "unterminated\n---\n\nbody\n'
+        assert _parse_frontmatter_quick(text) == {}
+
+
+class TestParserHandlesTripleDashValue:
+    """The top-level knowledge parser must also tolerate '---' inside scalars."""
+
+    def test_parse_article_with_triple_dash_summary(self, tmp_path: Path):
+        from signet.knowledge.parser import parse_article
+
+        content = (
+            '---\n'
+            'title: "A paper"\n'
+            'tags:\n  - tag1\n'
+            'summary: "---"\n'
+            'source: nightshift\n'
+            '---\n\n'
+            '# Body\n\nReal content.\n'
+        )
+        f = tmp_path / "article.md"
+        f.write_text(content)
+
+        a = parse_article(f, tmp_path)
+        assert a.frontmatter.title == "A paper"
+        assert a.frontmatter.summary == "---"
+        assert "Real content." in a.body
 
 
 class TestResearcherWikiIntegration:

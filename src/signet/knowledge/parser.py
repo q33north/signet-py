@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from pathlib import Path
 
 import yaml
 
 from signet.models.knowledge import WikiArticle, WikiFrontmatter
+
+_FRONTMATTER_RE = re.compile(r"^---\r?\n(.*?)\r?\n---\r?\n(.*)\Z", re.DOTALL)
 
 
 def parse_article(file_path: Path, wikis_root: Path) -> WikiArticle:
@@ -41,11 +44,16 @@ def scan_articles(wikis_path: Path) -> list[WikiArticle]:
 
 
 def _split_frontmatter(text: str) -> tuple[WikiFrontmatter, str]:
-    """Split ---frontmatter--- from body."""
-    if text.startswith("---"):
-        parts = text.split("---", 2)
-        if len(parts) >= 3:
-            fm_raw = yaml.safe_load(parts[1]) or {}
-            body = parts[2]
-            return WikiFrontmatter(**fm_raw), body
-    return WikiFrontmatter(), text
+    """Split ---frontmatter--- from body.
+
+    The delimiter is '---' on its own line. Splitting naively on '---' breaks
+    on YAML values that contain '---' (e.g. summaries that started life as
+    horizontal rules).
+    """
+    match = _FRONTMATTER_RE.match(text)
+    if not match:
+        return WikiFrontmatter(), text
+
+    fm_raw = yaml.safe_load(match.group(1)) or {}
+    body = match.group(2)
+    return WikiFrontmatter(**fm_raw), body

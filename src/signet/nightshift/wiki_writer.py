@@ -109,18 +109,31 @@ def build_article_body(artifact: ResearchArtifact) -> str:
     return "\n".join(parts) + "\n"
 
 
+_SEPARATOR_RE = re.compile(r"^[\-=_*~`]+$")
+
+
 def _build_summary(artifact: ResearchArtifact) -> str:
-    """Extract a one-line summary from the synthesis."""
+    """Extract a one-line summary from the synthesis.
+
+    Skips markdown headings, horizontal rules, and other separator/noise
+    lines so the summary never ends up being something like '---' that
+    would then confuse downstream frontmatter parsers.
+    """
     if not artifact.synthesis:
         return artifact.angle or artifact.topic
-    # Take the first non-empty line of the synthesis
+
     for line in artifact.synthesis.splitlines():
         stripped = line.strip()
-        if stripped and not stripped.startswith("#"):
-            # Truncate to ~200 chars
-            if len(stripped) > 200:
-                return stripped[:197] + "..."
-            return stripped
+        if not stripped:
+            continue
+        if stripped.startswith("#"):
+            continue
+        if _SEPARATOR_RE.match(stripped):
+            continue
+        if len(stripped) > 200:
+            return stripped[:197] + "..."
+        return stripped
+
     return artifact.angle or artifact.topic
 
 
@@ -248,15 +261,17 @@ def update_topic_index(topic_path: Path) -> None:
     log.debug("wiki_writer.index_updated", topic=topic_path.name, articles=len(articles))
 
 
+_FRONTMATTER_RE = re.compile(r"^---\r?\n(.*?)\r?\n---\r?\n", re.DOTALL)
+
+
 def _parse_frontmatter_quick(text: str) -> dict:
     """Quick frontmatter parse without the full WikiArticle model."""
     import yaml
 
-    if text.startswith("---"):
-        parts = text.split("---", 2)
-        if len(parts) >= 3:
-            try:
-                return yaml.safe_load(parts[1]) or {}
-            except yaml.YAMLError:
-                return {}
-    return {}
+    match = _FRONTMATTER_RE.match(text)
+    if not match:
+        return {}
+    try:
+        return yaml.safe_load(match.group(1)) or {}
+    except yaml.YAMLError:
+        return {}
