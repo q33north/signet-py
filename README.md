@@ -11,9 +11,15 @@ Built by [Q33 North](https://github.com/q33north).
 
 ## The idea
 
-If you've got compute sitting idle overnight and projects with well-defined success criteria, every night the agents aren't working is potential progress left on the table. Signet is an experiment in *research while you sleep*: an autonomous agent that picks up threads from the day's conversations, investigates them overnight, and leaves structured notes in a shared wiki that the whole lab can query.
+If you've got compute sitting idle overnight and projects with well-defined success criteria, every night the agents aren't 
+working is potential progress left on the table. Signet is an experiment in *research while you sleep*: an autonomous agent that 
+picks up threads from the day's conversations, investigates them overnight, and leaves structured notes in a shared wiki that a 
+whole lab can query.
 
-The pattern sits between two existing ideas. Anthropic's KAIROS (daemon-mode Claude) handles autonomous memory consolidation, but targets coding. Karpathy's [LLM-wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) builds compounding knowledge, but only when the user directs it. Neither quite fits a lab where researchers want an agent that surfaces relevant preprints overnight and maintains a queryable knowledge base without a bioinformatician manually compiling it.
+The pattern sits between two existing ideas: Anthropic's KAIROS (daemon-mode Claude) handles autonomous memory consolidation, but 
+targets coding, and Karpathy's [LLM-wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f), which builds compounding 
+knowledge, but only when directed. Neither quite fits a lab where researchers want an agent that surfaces relevant preprints 
+overnight and maintains a queryable knowledge base without a bioinformatician manually compiling it.
 
 Signet takes a stab at that gap with a four-tier knowledge layer:
 
@@ -24,11 +30,13 @@ Signet takes a stab at that gap with a four-tier knowledge layer:
 
 A few design commitments that should make the output trustworthy:
 
-- **Epistemic discipline as architecture**, not just prompting. Confidence ratings, attributed facts, and explicit "I don't know" live in the data models, not just the system prompt.
-- **Character as config**. Personality is defined in YAML, tunable without touching code.
-- **Interface-agnostic responder**. Discord today. CLI, Slack, or a web UI later without re-plumbing the agent.
+- **Epistemic discipline as architecture**, not just prompting. Confidence ratings, attributed facts, and explicit "I don't know" live 
+in the data models, not just the system prompt.
+- **Character as config**. Personality is defined in YAML, tunable without touching code. (Implements ideas from ElizaOS)
+- **Interface-agnostic responder**. Discord as of now, but CLI, Slack, or a web UI later without much re-plumbing of the agent.
 
-Each nightshift session sees existing wiki folders, prior research, and recent conversations, so topics compound over time instead of scattering into unrelated one-offs.
+Each nightshift session sees existing wiki folders, prior research, and recent conversations, so topics compound over time instead of 
+scattering into unrelated one-offs.
 
 For the long version, read the launch post: [Hello Signet](https://q33north.substack.com/p/hello-signet).
 
