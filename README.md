@@ -1,21 +1,27 @@
 # Signet
 
-Persistent AI research agent. Runs 24/7 on Discord, does autonomous overnight research in bioinformatics, genomics, proteomics, AI, and whatever else is interesting. Writes findings back to a compounding knowledge wiki.
+**Prototype lab research agent.** An experimental Discord-based AI agent that does autonomous overnight research in bioinformatics, cancer genomics, proteomics, and AI — and writes findings back to a compounding markdown knowledge wiki.
+
+> ⚠️ **Prototype, not production.** This is a personal research project exploring the "LLM + persistent wiki" pattern for compounding knowledge. It's under active development, APIs and schemas will change, and it makes no guarantees about data durability, cost controls, or multi-user safety. Use it for hacking and learning, not for anything you can't afford to lose.
 
 Built by [Q33 North](https://github.com/q33north).
 
-## How it works
+## The idea
 
-Signet is a Discord bot with a personality, long-term memory, and an autonomous research pipeline that runs during quiet periods. The core loop:
+Most agent demos are one-shot: ask a question, get an answer, throw it away. Signet is an experiment in the other direction — an agent that accumulates knowledge over time in a structured, human-readable store.
 
-1. **Chat** - responds to DMs, @mentions, and name mentions with context-aware conversation
-2. **Memory** - stores all messages with semantic embeddings for cross-channel recall
-3. **autoDream** - consolidates conversations into digests, entity facts, and reflections
-4. **Wiki** - maintains a persistent markdown knowledge base with YAML frontmatter
-5. **Nightshift** - autonomous multi-step research: topic selection, planning, deep dives, synthesis
-6. **Writeback** - research findings are written back to the wiki as markdown, synced to DB with embeddings, and available as context for future research
+The pattern is inspired by [Andrej Karpathy's LLM-wiki gist](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f): rather than doing RAG on raw documents every time, the agent maintains a persistent markdown wiki. New research updates pages, builds on prior findings, and flags open questions. Knowledge compounds instead of being re-derived.
 
-Research compounds over time. Each session builds on what came before.
+Signet layers a few things on top of that core idea:
+
+1. **Chat** — responds on Discord to DMs, @mentions, and name mentions with context-aware conversation
+2. **Memory** — all messages stored in Postgres with semantic embeddings for cross-channel recall
+3. **autoDream** — periodic consolidation of conversations into digests, entity facts, and reflections
+4. **Wiki** — a persistent markdown knowledge base with YAML frontmatter, live on your filesystem or Google Drive
+5. **Nightshift** — autonomous multi-step research during quiet periods: topic selection, planning, deep dives, synthesis
+6. **Writeback** — research findings are written back to the wiki, synced to the DB with embeddings, and available as context for the next research run
+
+Each nightshift session sees existing wiki folders, prior research, and recent conversations, so topics get deeper over time rather than scattering into unrelated one-offs.
 
 ## Stack
 
@@ -186,6 +192,19 @@ uv run pytest tests/test_wiki_writer.py  # Specific test file
 
 Tests use pytest + pytest-asyncio. All database interactions are mocked. No live DB required.
 
+## Status and limitations
+
+Signet is a working prototype, not a polished product. A few things to know:
+
+- **Single-user by design right now.** Memory and wiki are scoped to one operator; there's no multi-user isolation.
+- **Cost controls are basic.** Daily token budgets for nightshift exist (`NIGHTSHIFT_DAILY_TOKEN_BUDGET`) but there's no hard circuit breaker per run.
+- **No fact-checking layer.** The character prompt instructs the agent not to fabricate and to flag low confidence, and nightshift cites sources from PubMed/bioRxiv/wiki context, but the agent can still be wrong. Treat output as a research lead, not a citation.
+- **Wiki maintenance is manual.** Periodic sweeps for contradictions, stale claims, or folder consolidation are on the roadmap, not yet built.
+- **Schemas will change.** Database migrations are idempotent `CREATE IF NOT EXISTS` / `ALTER ADD IF NOT EXISTS`, but there's no formal migration story yet.
+- **Discord-specific.** The chat surface is Discord; there's no web UI. A companion project for browsing the wiki is in early work.
+
+Contributions, issues, and forks are welcome.
+
 ## License
 
-MIT
+MIT. See [LICENSE](LICENSE).
