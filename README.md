@@ -172,6 +172,63 @@ signet nightshift repost --topic proteomics
 signet nightshift repost --id abc123 --channel 1234567890
 ```
 
+## Workflow: starting a new topic
+
+The typical flow for seeding a new research area with source papers and letting Signet dig in overnight:
+
+```bash
+# 1. Create the topic folder in your wiki
+mkdir -p $WIKIS_PATH/spatial-transcriptomics/raw
+
+# 2. Drop source documents (PDF, PPTX, or DOCX) into raw/
+cp ~/Downloads/stahl-2016-visium.pdf $WIKIS_PATH/spatial-transcriptomics/raw/
+cp ~/Downloads/vickovic-hd.pdf $WIKIS_PATH/spatial-transcriptomics/raw/
+
+# 3. Ingest — Docling converts raw/ docs to markdown and syncs to the DB with embeddings
+uv run signet wiki ingest
+
+# 4. Queue a nightshift run into that folder
+uv run signet nightshift queue "Spatial transcriptomics resolution limits" -f spatial-transcriptomics
+
+# 5a. Wait for the autonomous trigger (quiet Discord + NIGHTSHIFT_ENABLED), or:
+# 5b. Fire it manually:
+uv run signet nightshift run
+```
+
+When nightshift runs, it pulls the ingested papers as context for planning and deep dives, then writes the synthesis back into that same folder as a sibling `.md` file. Subsequent runs see the synthesis too, so the topic compounds.
+
+### Optional: a research brief for richer direction
+
+For non-trivial topics, pass a markdown brief with `-b`. It gets injected as the highest-priority context, overriding generic topic framing:
+
+```bash
+cat > brief.md <<'EOF'
+# Goal
+Understand whether Visium HD's 2μm bins actually deliver single-cell resolution.
+
+# Key questions
+- How does diffusion limit effective resolution?
+- What's the real cell-capture rate vs paired scRNA-seq?
+
+# Constraints
+- Focus on lung tissue if possible
+- Skip brain/mouse-only papers
+
+# References
+- Stahl 2016, Vickovic HD 2024
+EOF
+
+uv run signet nightshift queue "Visium HD resolution in practice" -f spatial-transcriptomics -b brief.md
+```
+
+### Gotchas
+
+- `wiki ingest` is idempotent: already-converted files are skipped unless you pass `--force`.
+- The `-f` folder name must match the directory you created exactly (lowercase, kebab-case). A typo creates a new sibling folder.
+- Only one queued item gets picked up per autonomous trigger. Queue several and they'll process on successive quiet periods.
+
+> 💡 This protocol is a lot of typing. Driving it from Discord or Slack directly (e.g. "@signet, research this folder and these papers") is on the roadmap.
+
 ### Tools
 
 In live conversation Signet can invoke tools via the Anthropic tool-use API when she decides they're needed. No user syntax required — just mention a URL, paper, or file and she reaches for the right one.
