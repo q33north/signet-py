@@ -57,6 +57,7 @@ class Researcher:
         self._dreams = dreams
         self._research = research
         self._interrupted = False
+        self._last_context_slugs: list[str] = []
 
     @property
     def interrupted(self) -> bool:
@@ -70,6 +71,7 @@ class Researcher:
     async def run(self) -> ResearchReport:
         """Execute a full research session: pick topic, research, synthesize."""
         self._interrupted = False
+        self._last_context_slugs = []
         start = time.monotonic()
 
         # Check daily session limit
@@ -128,10 +130,16 @@ class Researcher:
             artifact = await self._synthesize(artifact)
             artifact.status = ResearchStatus.COMPLETED
             artifact.completed_at = datetime.now(timezone.utc)
+            # Record which wiki articles fed the synthesis (dedup, preserve order).
+            seen: set[str] = set()
+            artifact.source_wiki_slugs = [
+                s for s in self._last_context_slugs
+                if not (s in seen or seen.add(s))
+            ]
             await self._research.save(artifact)
 
             # Step 4: Write back to wiki and sync to DB
-            await self._write_to_wiki(artifact)
+            writeback = await self._write_to_wiki(artifact)
 
             log.info(
                 "research.complete",
@@ -139,7 +147,7 @@ class Researcher:
                 sections=len(artifact.sections),
                 tokens=artifact.token_count,
             )
-            return self._make_report(artifact, start)
+            return self._make_report(artifact, start, writeback)
 
         except Exception:
             log.exception("research.error", topic=topic)
@@ -184,9 +192,19 @@ class Researcher:
                 "\n\nAlready researched (DO NOT pick these or close variants):\n"
                 + "\n".join(f"- {t}" for t in already_done)
             )
+
+        existing_folders = self._list_wiki_folders()
+        folders_section = ""
+        if existing_folders:
+            folders_section = (
+                "\n\nExisting wiki folders (PREFER extending one of these "
+                "over inventing a new slug when the topic fits):\n"
+                + "\n".join(f"- {f}" for f in existing_folders)
+            )
+
         prompt = TOPIC_SELECTION_PROMPT.format(
             candidates="\n".join(f"- {c}" for c in candidates)
-        ) + already_section
+        ) + already_section + folders_section
         raw = await asyncio.to_thread(
             self._brain.quick, prompt, TOPIC_SELECTION_SYSTEM
         )
@@ -195,12 +213,45 @@ class Researcher:
             data = _parse_json(raw)
             topic = data.get("topic", "")
             angle = data.get("angle", "")
-            log.info("research.topic_selected", topic=topic, angle=angle)
-            return topic, angle, "", ""
+            wiki_folder = (data.get("wiki_folder") or "").strip()
+            if wiki_folder and wiki_folder not in existing_folders:
+                # Novel slug. Accept only if reasonably short — long slugs like
+                # "patient-derived-organoid-platforms-for-fusion-driven-..." are
+                # exactly the problem we're trying to avoid. Fall back to empty
+                # (which triggers slugify(topic)) if it looks like an angle-slug.
+                if len(wiki_folder) > 40:
+                    log.info(
+                        "research.topic_folder_too_long",
+                        proposed=wiki_folder,
+                    )
+                    wiki_folder = ""
+                else:
+                    log.info(
+                        "research.topic_new_folder",
+                        topic=topic,
+                        folder=wiki_folder,
+                    )
+            log.info(
+                "research.topic_selected",
+                topic=topic,
+                angle=angle,
+                wiki_folder=wiki_folder or "(new)",
+            )
+            return topic, angle, wiki_folder, ""
         except (json.JSONDecodeError, KeyError):
             log.warning("research.topic_selection_failed", raw=raw[:200])
             # Fallback: use first candidate
             return candidates[0], "", "", ""
+
+    def _list_wiki_folders(self) -> list[str]:
+        """List existing wiki folder slugs so topic selection can reuse them."""
+        path = settings.wikis_path
+        if not path or not path.exists():
+            return []
+        return sorted(
+            p.name for p in path.iterdir()
+            if p.is_dir() and not p.name.startswith(".")
+        )
 
     async def _refine_angle(self, topic: str, *, brief: str = "") -> str:
         """Given a broad topic, generate a specific research angle."""
@@ -282,6 +333,11 @@ class Researcher:
                 parts.append(
                     f"[Wiki: {r.article.frontmatter.title}]\n{content}"
                 )
+                # Track which wiki slugs actually fed the synthesis so we can
+                # surface "builds on" in the Discord writeback receipt.
+                slug = getattr(r.article, "slug", "")
+                if slug:
+                    self._last_context_slugs.append(slug)
         except Exception:
             pass
 
@@ -431,26 +487,60 @@ class Researcher:
 
         return artifact
 
-    async def _write_to_wiki(self, artifact: ResearchArtifact) -> None:
+    async def _write_to_wiki(self, artifact: ResearchArtifact) -> dict:
         """Step 4: Persist research as a wiki article and sync to DB.
 
         This closes the loop: research findings become wiki markdown,
         which gets embedded and available as context for future research.
+
+        Returns a receipt dict with keys: path, chars, added, updated, error.
+        Failures are logged at error level so they can't go silent.
         """
+        receipt: dict = {
+            "path": "",
+            "chars": 0,
+            "added": 0,
+            "updated": 0,
+            "error": "",
+        }
         try:
             wiki_path = write_artifact_to_wiki(artifact, settings.wikis_path)
+            receipt["path"] = str(wiki_path)
+            try:
+                receipt["chars"] = wiki_path.stat().st_size
+            except OSError:
+                pass
             log.info("research.wiki_written", path=str(wiki_path))
+        except Exception as e:
+            receipt["error"] = f"{type(e).__name__}: {e}"
+            log.error(
+                "research.wiki_write_failed",
+                topic=artifact.topic,
+                error=receipt["error"],
+                exc_info=True,
+            )
+            return receipt
 
-            # Sync the wiki to DB so embeddings are immediately available
+        try:
             result = await self._wiki.sync()
+            receipt["added"] = result.get("added", 0)
+            receipt["updated"] = result.get("updated", 0)
             log.info(
                 "research.wiki_synced",
-                added=result["added"],
-                updated=result["updated"],
+                added=receipt["added"],
+                updated=receipt["updated"],
             )
-        except Exception:
-            # Wiki writeback is not critical - log and continue
-            log.exception("research.wiki_write_failed", topic=artifact.topic)
+        except Exception as e:
+            # File was written but sync failed — partial success.
+            receipt["error"] = f"sync failed: {type(e).__name__}: {e}"
+            log.error(
+                "research.wiki_sync_failed",
+                topic=artifact.topic,
+                error=receipt["error"],
+                exc_info=True,
+            )
+
+        return receipt
 
     async def _fetch_biorxiv_context(self, topic: str, question: str) -> str:
         """Try to find relevant bioRxiv preprints. Returns formatted context or empty string."""
@@ -499,9 +589,13 @@ class Researcher:
             return ""
 
     def _make_report(
-        self, artifact: ResearchArtifact, start: float
+        self,
+        artifact: ResearchArtifact,
+        start: float,
+        writeback: dict | None = None,
     ) -> ResearchReport:
         """Build a report from a completed/failed/interrupted artifact."""
+        wb = writeback or {}
         return ResearchReport(
             topic=artifact.topic,
             sections_completed=sum(
@@ -510,11 +604,25 @@ class Researcher:
             total_tokens=artifact.token_count,
             duration_seconds=time.monotonic() - start,
             status=artifact.status,
+            wiki_path=wb.get("path", ""),
+            wiki_chars=wb.get("chars", 0),
+            wiki_sync_added=wb.get("added", 0),
+            wiki_sync_updated=wb.get("updated", 0),
+            wiki_write_error=wb.get("error", ""),
+            builds_on=list(artifact.source_wiki_slugs),
         )
 
 
-def format_research_for_discord(artifact: ResearchArtifact) -> str:
-    """Format a completed research artifact for Discord posting."""
+def format_research_for_discord(
+    artifact: ResearchArtifact,
+    report: "ResearchReport | None" = None,
+) -> str:
+    """Format a completed research artifact for Discord posting.
+
+    If `report` is provided, appends a writeback receipt (where the wiki
+    article landed, what it built on, whether sync failed). Without it the
+    output matches the legacy format — used by `signet nightshift replay`.
+    """
     parts = [
         f"did some digging on **{artifact.topic}** overnight. "
         f"here's what i found:\n",
@@ -541,7 +649,49 @@ def format_research_for_discord(artifact: ResearchArtifact) -> str:
 
     parts.append(f"\n*{artifact.token_count:,} tokens used{duration}*")
 
+    if report is not None:
+        receipt = _format_writeback_receipt(report)
+        if receipt:
+            parts.append(receipt)
+
     return "\n".join(parts)
+
+
+def _format_writeback_receipt(report: "ResearchReport") -> str:
+    """Render the wiki writeback receipt appended to each nightshift post."""
+    lines: list[str] = ["\n**📝 wiki writeback:**"]
+
+    if report.wiki_write_error:
+        lines.append(f"- ⚠️ failed: `{report.wiki_write_error}`")
+        lines.append("- nothing landed on disk. loop did not close this run.")
+        return "\n".join(lines)
+
+    if not report.wiki_path:
+        lines.append("- no article written (writeback never ran).")
+        return "\n".join(lines)
+
+    # Trim path to something readable: show only the last two segments.
+    path_parts = report.wiki_path.rsplit("/", 2)
+    short_path = "/".join(path_parts[-2:]) if len(path_parts) >= 2 else report.wiki_path
+    size_kb = report.wiki_chars / 1024 if report.wiki_chars else 0
+    size_str = f" · {size_kb:.1f} KB" if size_kb else ""
+    lines.append(f"- wrote `{short_path}`{size_str}")
+
+    sync_bits = []
+    if report.wiki_sync_added:
+        sync_bits.append(f"{report.wiki_sync_added} added")
+    if report.wiki_sync_updated:
+        sync_bits.append(f"{report.wiki_sync_updated} updated")
+    if sync_bits:
+        lines.append(f"- synced to DB: {', '.join(sync_bits)}")
+
+    if report.builds_on:
+        joined = ", ".join(f"`{s}`" for s in report.builds_on[:5])
+        lines.append(f"- builds on: {joined}")
+    else:
+        lines.append("- builds on: *nothing — no prior wiki context matched this topic*")
+
+    return "\n".join(lines)
 
 
 def _parse_json(raw: str) -> dict:

@@ -219,10 +219,15 @@ class SignetBot(discord.Client):
                     if channel:
                         recent = await self._research.recent(limit=1)
                         if recent:
-                            text = format_research_for_discord(recent[0])
+                            text = format_research_for_discord(recent[0], report)
                             for chunk in _split_message(text):
                                 await channel.send(chunk)
-                            log.info("nightshift.posted", topic=report.topic)
+                            log.info(
+                                "nightshift.posted",
+                                topic=report.topic,
+                                wiki_path=report.wiki_path,
+                                wiki_error=report.wiki_write_error,
+                            )
 
             except asyncio.CancelledError:
                 log.info("nightshift.cancelled")

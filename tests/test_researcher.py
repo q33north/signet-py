@@ -15,6 +15,7 @@ from signet.models.dreams import Dream, DreamResult, DreamType
 from signet.models.knowledge import WikiArticle, WikiFrontmatter, WikiSearchResult
 from signet.models.research import (
     ResearchArtifact,
+    ResearchReport,
     ResearchResult,
     ResearchSection,
     ResearchStatus,
@@ -107,6 +108,7 @@ class TestPickTopic:
             quick_response=json.dumps({
                 "topic": "KRAS G12C",
                 "angle": "resistance mechanisms",
+                "wiki_folder": "",
                 "why": "active area",
             }),
         )
@@ -125,6 +127,140 @@ class TestPickTopic:
         assert topic == "KRAS G12C"
         assert angle == "resistance mechanisms"
         assert wiki_folder == ""
+
+    @pytest.mark.asyncio
+    async def test_llm_reuses_existing_wiki_folder(self):
+        """When the LLM picks an existing folder slug, it should be honored."""
+        brain = _mock_brain(
+            quick_response=json.dumps({
+                "topic": "ALK resistance via bypass signaling",
+                "angle": "MET amplification",
+                "wiki_folder": "eml4-alk-resistance-mechanisms-and-proteomics",
+                "why": "extending existing coverage",
+            }),
+        )
+        memory, wiki, dreams, research = _mock_stores()
+        dreams.recall.return_value = [DreamResult(
+            dream=Dream(
+                dream_type=DreamType.ENTITY_FACT,
+                content="ALK fusion NSCLC resistance",
+                entity_name="ALK",
+            ),
+            similarity=0.9,
+        )]
+
+        researcher = Researcher(brain, memory, wiki, dreams, research)
+        with patch.object(
+            researcher,
+            "_list_wiki_folders",
+            return_value=["eml4-alk-resistance-mechanisms-and-proteomics", "tp53"],
+        ):
+            topic, angle, wiki_folder, brief = await researcher._pick_topic()
+
+        assert wiki_folder == "eml4-alk-resistance-mechanisms-and-proteomics"
+
+    @pytest.mark.asyncio
+    async def test_llm_short_novel_folder_accepted(self):
+        """A short (<=40 char) novel slug is accepted when no existing fit."""
+        brain = _mock_brain(
+            quick_response=json.dumps({
+                "topic": "Spatial transcriptomics",
+                "angle": "Visium HD resolution limits",
+                "wiki_folder": "spatial-transcriptomics",
+                "why": "new area",
+            }),
+        )
+        memory, wiki, dreams, research = _mock_stores()
+        dreams.recall.return_value = [DreamResult(
+            dream=Dream(
+                dream_type=DreamType.ENTITY_FACT,
+                content="Visium HD",
+                entity_name="spatial",
+            ),
+            similarity=0.8,
+        )]
+
+        researcher = Researcher(brain, memory, wiki, dreams, research)
+        with patch.object(researcher, "_list_wiki_folders", return_value=["tp53"]):
+            topic, angle, wiki_folder, brief = await researcher._pick_topic()
+
+        assert wiki_folder == "spatial-transcriptomics"
+
+    @pytest.mark.asyncio
+    async def test_existing_folders_injected_into_prompt(self):
+        """Topic-selection prompt must expose existing folders to the LLM."""
+        brain = _mock_brain(
+            quick_response=json.dumps({
+                "topic": "x", "angle": "y", "wiki_folder": "", "why": "z",
+            }),
+        )
+        memory, wiki, dreams, research = _mock_stores()
+        dreams.recall.return_value = [DreamResult(
+            dream=Dream(
+                dream_type=DreamType.ENTITY_FACT,
+                content="c", entity_name="e",
+            ),
+            similarity=0.5,
+        )]
+
+        researcher = Researcher(brain, memory, wiki, dreams, research)
+        with patch.object(
+            researcher,
+            "_list_wiki_folders",
+            return_value=["cancer_genomics", "tp53"],
+        ):
+            await researcher._pick_topic()
+
+        prompt = brain.quick.call_args[0][0]
+        assert "Existing wiki folders" in prompt
+        assert "cancer_genomics" in prompt
+        assert "tp53" in prompt
+
+    def test_list_wiki_folders_skips_files_and_hidden(self, tmp_path, monkeypatch):
+        """_list_wiki_folders returns only visible subdirectories, sorted."""
+        from signet.config import settings as real_settings
+
+        (tmp_path / "tp53").mkdir()
+        (tmp_path / "cancer_genomics").mkdir()
+        (tmp_path / ".obsidian").mkdir()
+        (tmp_path / "Untitled.canvas").write_text("{}")
+        (tmp_path / "._hidden").write_text("")
+
+        monkeypatch.setattr(real_settings, "wikis_path", tmp_path)
+
+        brain = _mock_brain()
+        memory, wiki, dreams, research = _mock_stores()
+        researcher = Researcher(brain, memory, wiki, dreams, research)
+
+        folders = researcher._list_wiki_folders()
+        assert folders == ["cancer_genomics", "tp53"]
+
+    @pytest.mark.asyncio
+    async def test_llm_long_novel_folder_rejected(self):
+        """Novel slugs longer than 40 chars are dropped to avoid angle-slug folders."""
+        brain = _mock_brain(
+            quick_response=json.dumps({
+                "topic": "PDO platforms",
+                "angle": "fusion-driven lung cancer",
+                "wiki_folder": "patient-derived-organoid-platforms-for-fusion-driven-lung-cancers",
+                "why": "new area",
+            }),
+        )
+        memory, wiki, dreams, research = _mock_stores()
+        dreams.recall.return_value = [DreamResult(
+            dream=Dream(
+                dream_type=DreamType.ENTITY_FACT,
+                content="PDO platforms",
+                entity_name="PDO",
+            ),
+            similarity=0.8,
+        )]
+
+        researcher = Researcher(brain, memory, wiki, dreams, research)
+        with patch.object(researcher, "_list_wiki_folders", return_value=[]):
+            topic, angle, wiki_folder, brief = await researcher._pick_topic()
+
+        assert wiki_folder == ""  # long novel slug rejected
 
     @pytest.mark.asyncio
     async def test_no_candidates_returns_empty(self):
@@ -420,6 +556,56 @@ class TestFormatDiscord:
         assert "q1?" in text
         assert "check COSMIC" in text
         assert "5,000" in text
+
+
+class TestWritebackReceipt:
+    def _artifact(self):
+        return ResearchArtifact(
+            topic="ALK resistance",
+            synthesis="findings here",
+            confidence="medium",
+            token_count=1000,
+            completed_at=datetime.now(timezone.utc),
+        )
+
+    def test_no_report_means_no_receipt(self):
+        text = format_research_for_discord(self._artifact())
+        assert "wiki writeback" not in text
+
+    def test_successful_writeback_shows_path_and_sync(self):
+        report = ResearchReport(
+            wiki_path="/wikis/cancer/alk-variants.md",
+            wiki_chars=4096,
+            wiki_sync_added=1,
+            wiki_sync_updated=0,
+            builds_on=["cancer/eml4-alk-basics"],
+        )
+        text = format_research_for_discord(self._artifact(), report)
+
+        assert "wiki writeback" in text
+        assert "cancer/alk-variants.md" in text
+        assert "4.0 KB" in text
+        assert "1 added" in text
+        assert "eml4-alk-basics" in text
+
+    def test_failed_writeback_is_loud(self):
+        report = ResearchReport(wiki_write_error="PermissionError: read-only fs")
+        text = format_research_for_discord(self._artifact(), report)
+
+        assert "⚠️ failed" in text
+        assert "PermissionError" in text
+        assert "loop did not close" in text
+
+    def test_empty_builds_on_is_called_out(self):
+        report = ResearchReport(
+            wiki_path="/wikis/cancer/first-article.md",
+            wiki_chars=2048,
+            wiki_sync_added=1,
+            builds_on=[],
+        )
+        text = format_research_for_discord(self._artifact(), report)
+
+        assert "nothing" in text.lower()
 
 
 class TestParseJson:

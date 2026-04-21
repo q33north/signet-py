@@ -60,3 +60,10 @@ class ResearchReport(BaseModel):
     total_tokens: int = 0
     duration_seconds: float = 0.0
     status: ResearchStatus = ResearchStatus.COMPLETED
+    # Wiki writeback receipt: populated by _write_to_wiki, surfaced in Discord.
+    wiki_path: str = ""
+    wiki_chars: int = 0
+    wiki_sync_added: int = 0
+    wiki_sync_updated: int = 0
+    wiki_write_error: str = ""
+    builds_on: list[str] = Field(default_factory=list)  # wiki slugs used as context

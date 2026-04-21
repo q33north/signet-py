@@ -18,10 +18,20 @@ Here are the candidate topics for tonight's research:
 
 {candidates}
 
-Pick ONE topic and define a specific research angle. Return JSON:
+Pick ONE topic and define a specific research angle.
+
+For `wiki_folder`: STRONGLY prefer extending an existing folder if any fits \
+the topic semantically (even loosely). Only invent a new slug when no existing \
+folder is a reasonable home. When reusing, return the folder slug EXACTLY as \
+listed. When inventing, use a short, general slug (kebab-case, <=40 chars) \
+that could host future related articles — not a slug that encodes the specific \
+angle.
+
+Return JSON:
 {{
   "topic": "the broad topic",
   "angle": "the specific question or angle to investigate",
+  "wiki_folder": "existing-folder-slug OR new-general-slug-if-no-fit",
   "why": "one sentence on why this is the best pick"
 }}"""
 
