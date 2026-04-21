@@ -33,6 +33,11 @@ class Settings(BaseSettings):
 
     # Dreams / autoDream
     dream_recall_limit: int = 3
+    dream_enabled: bool = False
+    dream_interval_minutes: int = 720  # 12 hours between runs
+    dream_min_messages: int = 20  # skip runs with fewer unconsolidated messages
+    dream_max_messages_per_run: int = 500
+    dream_channel_id: str = ""  # optional admin channel for dream receipts
 
     # Filesystem access (tool use)
     allowed_paths: list[Path] = [

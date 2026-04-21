@@ -14,6 +14,7 @@ from signet.core.responder import Responder
 from signet.knowledge.store import WikiStore
 from signet.memory.store import MemoryStore
 from signet.models.memory import Message, MessageRole
+from signet.nightshift.dreamer import Dreamer
 from signet.nightshift.research_store import ResearchStore
 from signet.nightshift.researcher import Researcher, format_research_for_discord
 from signet.nightshift.store import DreamStore
@@ -52,6 +53,8 @@ class SignetBot(discord.Client):
         self._last_activity: datetime = datetime.now(timezone.utc)
         self._researcher: Researcher | None = None
         self._nightshift_task: asyncio.Task | None = None
+        self._dreamer: Dreamer | None = None
+        self._dream_task: asyncio.Task | None = None
 
     async def setup_hook(self) -> None:
         """Called by discord.py after login, before events. Async init goes here."""
@@ -84,9 +87,25 @@ class SignetBot(discord.Client):
             self._nightshift_task = asyncio.create_task(self._nightshift_loop())
             log.info("discord.nightshift_started")
 
+        # Start dream consolidation loop if enabled — independent of nightshift
+        if settings.dream_enabled:
+            self._dreamer = Dreamer(
+                memory=self._memory,
+                dreams=self._dreams,
+                brain=self._brain,
+            )
+            self._dream_task = asyncio.create_task(self._dream_loop())
+            log.info(
+                "discord.dream_scheduler_started",
+                interval_minutes=settings.dream_interval_minutes,
+                min_messages=settings.dream_min_messages,
+            )
+
     async def close(self) -> None:
         if self._nightshift_task and not self._nightshift_task.done():
             self._nightshift_task.cancel()
+        if self._dream_task and not self._dream_task.done():
+            self._dream_task.cancel()
         await self._research.close()
         await self._dreams.close()
         await self._wiki.close()
@@ -234,6 +253,60 @@ class SignetBot(discord.Client):
                 break
             except Exception:
                 log.exception("nightshift.loop_error")
+
+    async def _dream_loop(self) -> None:
+        """Background loop that runs autoDream on a fixed interval.
+
+        Silent by default. If `dream_channel_id` is set, posts a terse receipt
+        there so the admin can verify it's actually running.
+        """
+        interval = settings.dream_interval_minutes * 60
+
+        while True:
+            try:
+                await asyncio.sleep(interval)
+
+                if self._dreamer is None:
+                    continue
+
+                pending = await self._memory.unconsolidated_count()
+                if pending < settings.dream_min_messages:
+                    log.info(
+                        "dream.skipped_below_threshold",
+                        pending=pending,
+                        threshold=settings.dream_min_messages,
+                    )
+                    continue
+
+                log.info("dream.scheduled_run", pending=pending)
+                report = await self._dreamer.dream(
+                    max_messages=settings.dream_max_messages_per_run
+                )
+                log.info(
+                    "dream.scheduled_complete",
+                    messages=report.messages_processed,
+                    digests=report.digests,
+                    entity_facts=report.entity_facts,
+                    reflections=report.reflections,
+                )
+
+                if settings.dream_channel_id and report.messages_processed > 0:
+                    try:
+                        channel = self.get_channel(int(settings.dream_channel_id))
+                        if channel is None:
+                            channel = await self.fetch_channel(
+                                int(settings.dream_channel_id)
+                            )
+                        text = _format_dream_receipt(report)
+                        await channel.send(text)
+                    except Exception:
+                        log.exception("dream.receipt_post_failed")
+
+            except asyncio.CancelledError:
+                log.info("dream.cancelled")
+                break
+            except Exception:
+                log.exception("dream.loop_error")
                 await asyncio.sleep(60)
 
 
@@ -299,6 +372,19 @@ async def _read_attachment(att: discord.Attachment) -> str | None:
             return None
 
     return None
+
+
+def _format_dream_receipt(report) -> str:
+    """Terse admin-channel receipt for a scheduled dream run."""
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    return (
+        f"💭 **dream cycle @ {ts}**\n"
+        f"- messages: {report.messages_processed} across "
+        f"{report.sessions_processed} conversation(s)\n"
+        f"- produced: {report.digests} digests, "
+        f"{report.entity_facts} entity facts, "
+        f"{report.reflections} reflections"
+    )
 
 
 def _split_message(text: str, limit: int = 2000) -> list[str]:
