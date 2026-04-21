@@ -1,27 +1,36 @@
 # Signet
 
-**Prototype lab research agent.** An experimental Discord-based AI agent that does autonomous overnight research in bioinformatics, cancer genomics, proteomics, and AI — and writes findings back to a compounding markdown knowledge wiki.
+**Prototype lab research agent.** An experimental Discord-based AI agent that does autonomous overnight research in bioinformatics, 
+cancer genomics, proteomics, and AI. Writes findings back to a compounding markdown knowledge wiki. Has a personality.
 
-> ⚠️ **Prototype, not production.** This is a personal research project exploring the "LLM + persistent wiki" pattern for compounding knowledge. It's under active development, APIs and schemas will change, and it makes no guarantees about data durability, cost controls, or multi-user safety. Use it for hacking and learning, not for anything you can't afford to lose.
+> ⚠️ **Prototype, not production.** This is a personal research project exploring the "LLM + persistent wiki" pattern for compounding 
+> knowledge. It's under active development, APIs and schemas will change, and it makes no guarantees about data durability, cost controls, 
+> or multi-user safety. Use it for hacking and learning, not for anything you can't afford to lose.
 
 Built by [Q33 North](https://github.com/q33north).
 
 ## The idea
 
-Most agent demos are one-shot: ask a question, get an answer, throw it away. Signet is an experiment in the other direction — an agent that accumulates knowledge over time in a structured, human-readable store.
+If you've got compute sitting idle overnight and projects with well-defined success criteria, every night the agents aren't working is potential progress left on the table. Signet is an experiment in *research while you sleep*: an autonomous agent that picks up threads from the day's conversations, investigates them overnight, and leaves structured notes in a shared wiki that the whole lab can query.
 
-The pattern is inspired by [Andrej Karpathy's LLM-wiki gist](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f): rather than doing RAG on raw documents every time, the agent maintains a persistent markdown wiki. New research updates pages, builds on prior findings, and flags open questions. Knowledge compounds instead of being re-derived.
+The pattern sits between two existing ideas. Anthropic's KAIROS (daemon-mode Claude) handles autonomous memory consolidation, but targets coding. Karpathy's [LLM-wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) builds compounding knowledge, but only when the user directs it. Neither quite fits a lab where researchers want an agent that surfaces relevant preprints overnight and maintains a queryable knowledge base without a bioinformatician manually compiling it.
 
-Signet layers a few things on top of that core idea:
+Signet takes a stab at that gap with a four-tier knowledge layer:
 
-1. **Chat** — responds on Discord to DMs, @mentions, and name mentions with context-aware conversation
-2. **Memory** — all messages stored in Postgres with semantic embeddings for cross-channel recall
-3. **autoDream** — periodic consolidation of conversations into digests, entity facts, and reflections
-4. **Wiki** — a persistent markdown knowledge base with YAML frontmatter, live on your filesystem or Google Drive
-5. **Nightshift** — autonomous multi-step research during quiet periods: topic selection, planning, deep dives, synthesis
-6. **Writeback** — research findings are written back to the wiki, synced to the DB with embeddings, and available as context for the next research run
+1. **Raw memory** (episodic). Every message embedded in Postgres + pgvector for semantic recall.
+2. **Consolidated dreams** (semantic). autoDream extracts digests, entity facts, and reflections from conversations.
+3. **Curated knowledge** (reference). Markdown wiki articles plus PDF/DOCX/PPTX ingestion via Docling.
+4. **Research artifacts** (generated). Nightshift deep dives with provenance, confidence levels, and open questions that feed the next run.
 
-Each nightshift session sees existing wiki folders, prior research, and recent conversations, so topics get deeper over time rather than scattering into unrelated one-offs.
+A few design commitments that should make the output trustworthy:
+
+- **Epistemic discipline as architecture**, not just prompting. Confidence ratings, attributed facts, and explicit "I don't know" live in the data models, not just the system prompt.
+- **Character as config**. Personality is defined in YAML, tunable without touching code.
+- **Interface-agnostic responder**. Discord today. CLI, Slack, or a web UI later without re-plumbing the agent.
+
+Each nightshift session sees existing wiki folders, prior research, and recent conversations, so topics compound over time instead of scattering into unrelated one-offs.
+
+For the long version, read the launch post: [Hello Signet](https://q33north.substack.com/p/hello-signet).
 
 ## Stack
 
