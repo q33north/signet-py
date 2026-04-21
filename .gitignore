@@ -9,6 +9,6 @@ build/
 *.log
 .DS_Store
 .venv/
-wikis/*/raw/
+wikis/
 audit/*.jsonl
 .memsearch/
