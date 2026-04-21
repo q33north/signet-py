@@ -86,9 +86,25 @@ NIGHTSHIFT_CHANNEL_ID=your-channel-id
 NIGHTSHIFT_QUIET_MINUTES=30
 NIGHTSHIFT_MAX_SESSIONS=3
 
+# autoDream scheduler (optional)
+DREAM_ENABLED=true
+DREAM_INTERVAL_MINUTES=720        # every 12 hours
+DREAM_MIN_MESSAGES=20             # skip runs below this threshold
+DREAM_CHANNEL_ID=your-admin-channel-id  # optional; see Discord setup below
+
 # Wiki location (optional, defaults to ./wikis/)
 WIKIS_PATH=/path/to/your/wiki/directory
 ```
+
+### Discord setup
+
+At minimum Signet needs a single channel to chat in. For the autonomous features it helps to have a few more:
+
+- **General chat channel** — where you DM or @mention Signet. Any channel works.
+- **`#nightshift`** (optional) — where nightshift posts research reports. Set `NIGHTSHIFT_CHANNEL_ID` to its ID.
+- **`#dreams`** (optional, admin-only recommended) — where the dream scheduler posts terse receipts after each consolidation cycle (what it processed, how many digests/entity facts/reflections produced). Set `DREAM_CHANNEL_ID` to its ID. Make this a private channel visible only to you and Signet if you don't want dream internals visible to other server members.
+
+To get a channel ID in Discord: enable Developer Mode (User Settings → Advanced → Developer Mode), then right-click the channel and "Copy Channel ID".
 
 ### Database setup
 
