@@ -35,7 +35,7 @@ def _slugify(name: str) -> str:
     return re.sub(r"-+", "-", name).strip("-")
 
 
-def _make_frontmatter(title: str, tags: list[str]) -> str:
+def _make_frontmatter(title: str, tags: list[str], source_file: str) -> str:
     tag_str = "\n".join(f"  - {t}" for t in tags)
     today = date.today().isoformat()
     return f"""---
@@ -46,6 +46,7 @@ summary: ""
 created: {today}
 updated: {today}
 source: docling
+source_file: {source_file}
 ---
 
 """
@@ -91,7 +92,7 @@ def ingest_raw(wikis_path: Path, *, force: bool = False) -> dict[str, int]:
 
         for file_path in files:
             slug = _slugify(file_path.stem)
-            output_path = topic_dir / f"{slug}.md"
+            output_path = topic_dir / f"{slug}.raw.md"
 
             if output_path.exists() and not force:
                 log.debug("ingest.skip", slug=slug, reason="already exists")
@@ -108,7 +109,7 @@ def ingest_raw(wikis_path: Path, *, force: bool = False) -> dict[str, int]:
                 continue
 
             title = file_path.stem.replace("_", " ").replace("-", " ").title()
-            frontmatter = _make_frontmatter(title, tags=[topic])
+            frontmatter = _make_frontmatter(title, tags=[topic], source_file=file_path.name)
             output_path.write_text(frontmatter + body, encoding="utf-8")
 
             log.info("ingest.wrote", output=str(output_path), chars=len(body))

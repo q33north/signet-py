@@ -40,6 +40,8 @@ def scan_articles(wikis_path: Path) -> list[WikiArticle]:
     for md_file in sorted(wikis_path.glob("**/*.md")):
         if md_file.name.startswith("_"):
             continue
+        if md_file.name.endswith(".raw.md"):
+            continue
         articles.append(parse_article(md_file, wikis_path))
     return articles
 

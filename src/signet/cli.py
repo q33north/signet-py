@@ -231,12 +231,17 @@ def search(query: str, limit: int = 5) -> None:
 
 
 @wiki_app.command()
-def ingest(force: bool = typer.Option(False, "--force", help="Re-convert even if .md exists")) -> None:
-    """Convert documents (PDF, PPTX, DOCX) in raw/ directories to markdown via Docling."""
+def ingest(
+    force: bool = typer.Option(False, "--force", help="Re-convert and re-summarize even if outputs exist"),
+    skip_summary: bool = typer.Option(False, "--skip-summary", help="Skip summarization step"),
+) -> None:
+    """Convert documents (PDF, PPTX, DOCX) to .raw.md via Docling, then summarize to .md."""
     import asyncio
 
+    from signet.brain.client import Brain
     from signet.knowledge.ingest import ingest_raw
     from signet.knowledge.store import WikiStore
+    from signet.knowledge.summarize import summarize_all
     from signet.memory.embeddings import EmbeddingService
 
     console.print(f"[bold]Ingesting from:[/bold] {settings.wikis_path}/*/raw/")
@@ -246,8 +251,62 @@ def ingest(force: bool = typer.Option(False, "--force", help="Re-convert even if
         f"errored={result['errored']}[/green]"
     )
 
-    if result["converted"] > 0:
-        console.print("[bold]Syncing new articles to database...[/bold]")
+    if not skip_summary:
+        console.print("[bold]Summarizing raw articles via Sonnet...[/bold]")
+        brain = Brain()
+        s = summarize_all(settings.wikis_path, brain, force=force)
+        console.print(
+            f"[green]summarized={s['summarized']} skipped={s['skipped']} "
+            f"errored={s['errored']} migrated={s['migrated']}[/green]"
+        )
+
+    console.print("[bold]Syncing articles to database...[/bold]")
+
+    async def _sync() -> dict[str, int]:
+        embedder = EmbeddingService(model_name=settings.embedding_model)
+        store = WikiStore(
+            wikis_path=settings.wikis_path,
+            database_url=settings.database_url,
+            embedder=embedder,
+        )
+        await store.connect()
+        await store.initialize_schema()
+        sync_result = await store.sync()
+        await store.close()
+        return sync_result
+
+    sync_result = asyncio.run(_sync())
+    console.print(
+        f"[green]added={sync_result['added']} updated={sync_result['updated']} "
+        f"removed={sync_result['removed']}[/green]"
+    )
+
+
+@wiki_app.command()
+def summarize(
+    force: bool = typer.Option(False, "--force", help="Re-summarize even if summary exists"),
+    slug: str = typer.Option("", "--slug", help="Only summarize this slug"),
+) -> None:
+    """Summarize raw wiki articles (.raw.md) into structured digests via Sonnet."""
+    import asyncio
+
+    from signet.brain.client import Brain
+    from signet.knowledge.store import WikiStore
+    from signet.knowledge.summarize import summarize_all
+    from signet.memory.embeddings import EmbeddingService
+
+    brain = Brain()
+    console.print(f"[bold]Summarizing in:[/bold] {settings.wikis_path}")
+    result = summarize_all(
+        settings.wikis_path, brain, force=force, only_slug=slug or None
+    )
+    console.print(
+        f"[green]summarized={result['summarized']} skipped={result['skipped']} "
+        f"errored={result['errored']} migrated={result['migrated']}[/green]"
+    )
+
+    if result["summarized"] > 0 or result["migrated"] > 0:
+        console.print("[bold]Syncing to database...[/bold]")
 
         async def _sync() -> dict[str, int]:
             embedder = EmbeddingService(model_name=settings.embedding_model)
