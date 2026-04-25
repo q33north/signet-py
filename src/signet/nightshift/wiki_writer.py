@@ -184,7 +184,9 @@ def write_artifact_to_wiki(
     )
 
     body = build_article_body(artifact)
-    file_path.write_text(frontmatter + body, encoding="utf-8")
+    # Strip null bytes; Postgres TEXT rejects 0x00 and LLM output occasionally emits one.
+    payload = (frontmatter + body).replace("\x00", "")
+    file_path.write_text(payload, encoding="utf-8")
 
     log.info(
         "wiki_writer.wrote",

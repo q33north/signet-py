@@ -49,7 +49,7 @@ class WikiStore:
         if self._pool:
             await self._pool.close()
 
-    async def sync(self) -> dict[str, int]:
+    async def sync(self) -> dict:
         """Sync .md files from disk into DB. Re-embeds changed files only."""
         articles = scan_articles(self._wikis_path)
         disk_slugs = {a.slug for a in articles}
@@ -58,29 +58,39 @@ class WikiStore:
             rows = await conn.fetch("SELECT slug, content_hash FROM wiki_articles")
         db_state = {r["slug"]: r["content_hash"] for r in rows}
 
-        added = 0
-        updated = 0
+        added_slugs: list[str] = []
+        updated_slugs: list[str] = []
 
         for article in articles:
             if article.slug not in db_state:
                 await self._upsert_article(article)
-                added += 1
+                added_slugs.append(article.slug)
             elif db_state[article.slug] != article.content_hash:
                 await self._upsert_article(article)
-                updated += 1
+                updated_slugs.append(article.slug)
 
-        removed_slugs = set(db_state.keys()) - disk_slugs
-        removed = 0
+        removed_slugs = sorted(set(db_state.keys()) - disk_slugs)
         if removed_slugs:
             async with self._pool.acquire() as conn:
                 await conn.execute(
                     "DELETE FROM wiki_articles WHERE slug = ANY($1)",
-                    list(removed_slugs),
+                    removed_slugs,
                 )
-            removed = len(removed_slugs)
 
-        log.info("wiki.synced", added=added, updated=updated, removed=removed)
-        return {"added": added, "updated": updated, "removed": removed}
+        log.info(
+            "wiki.synced",
+            added=len(added_slugs),
+            updated=len(updated_slugs),
+            removed=len(removed_slugs),
+        )
+        return {
+            "added": len(added_slugs),
+            "updated": len(updated_slugs),
+            "removed": len(removed_slugs),
+            "added_slugs": added_slugs,
+            "updated_slugs": updated_slugs,
+            "removed_slugs": removed_slugs,
+        }
 
     async def search(
         self,

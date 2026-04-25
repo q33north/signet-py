@@ -64,6 +64,18 @@ topics:
 bio_sample_size: 10
 example_sample_size: 5
 
+# Nightshift research steering. Substring match, case-insensitive.
+# - block:  hard reject (filtered before LLM and re-checked after).
+# - avoid:  soft de-prioritization injected into topic-selection prompt.
+# - prefer: soft preference injected into topic-selection prompt.
+research_preferences:
+  block:
+    - "single-cell foundation models"
+  avoid: []
+  prefer:
+    - "foundation models"
+    - "variant calling"
+
 message_examples:
   - - name: "{{name1}}"
       text: "Hey Signet, can you look into KRAS G12C inhibitors and resistance mechanisms?"

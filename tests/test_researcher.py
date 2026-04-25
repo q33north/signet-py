@@ -596,6 +596,29 @@ class TestWritebackReceipt:
         assert "PermissionError" in text
         assert "loop did not close" in text
 
+    def test_per_slug_detail_in_receipt(self):
+        report = ResearchReport(
+            wiki_path="/wikis/cancer/alk-variants.md",
+            wiki_chars=2048,
+            wiki_sync_added=2,
+            wiki_sync_updated=1,
+            wiki_added_slugs=["alk-variants", "_index"],
+            wiki_updated_slugs=["eml4-alk-basics"],
+        )
+        text = format_research_for_discord(self._artifact(), report)
+        assert "`alk-variants`" in text and "(new)" in text
+        assert "`eml4-alk-basics`" in text and "(updated)" in text
+
+    def test_per_slug_overflow_summarized(self):
+        report = ResearchReport(
+            wiki_path="/wikis/x/y.md",
+            wiki_chars=100,
+            wiki_sync_added=12,
+            wiki_added_slugs=[f"slug-{i}" for i in range(12)],
+        )
+        text = format_research_for_discord(self._artifact(), report)
+        assert "…and 4 more" in text
+
     def test_empty_builds_on_is_called_out(self):
         report = ResearchReport(
             wiki_path="/wikis/cancer/first-article.md",

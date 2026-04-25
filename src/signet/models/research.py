@@ -65,5 +65,7 @@ class ResearchReport(BaseModel):
     wiki_chars: int = 0
     wiki_sync_added: int = 0
     wiki_sync_updated: int = 0
+    wiki_added_slugs: list[str] = Field(default_factory=list)
+    wiki_updated_slugs: list[str] = Field(default_factory=list)
     wiki_write_error: str = ""
     builds_on: list[str] = Field(default_factory=list)  # wiki slugs used as context

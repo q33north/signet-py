@@ -33,6 +33,7 @@ from signet.nightshift.research_prompts import (
     TOPIC_SELECTION_PROMPT,
     TOPIC_SELECTION_SYSTEM,
 )
+from signet.nightshift.preferences import ResearchPreferences, load_preferences
 from signet.nightshift.research_store import ResearchStore
 from signet.nightshift.store import DreamStore
 from signet.nightshift.wiki_writer import write_artifact_to_wiki
@@ -50,12 +51,14 @@ class Researcher:
         wiki: WikiStore,
         dreams: DreamStore,
         research: ResearchStore,
+        preferences: ResearchPreferences | None = None,
     ) -> None:
         self._brain = brain
         self._memory = memory
         self._wiki = wiki
         self._dreams = dreams
         self._research = research
+        self._prefs = preferences if preferences is not None else load_preferences(settings.character_path)
         self._interrupted = False
         self._last_context_slugs: list[str] = []
 
@@ -172,6 +175,13 @@ class Researcher:
 
         # Gather candidates from multiple sources
         candidates = await self._gather_candidates()
+        # Filter blocked candidates upstream so the LLM never sees them.
+        if self._prefs.block:
+            filtered = [c for c in candidates if self._prefs.is_blocked(c) is None]
+            dropped = len(candidates) - len(filtered)
+            if dropped:
+                log.info("research.prefs_filtered_candidates", dropped=dropped)
+            candidates = filtered
         if not candidates:
             return "", "", "", ""
 
@@ -202,17 +212,36 @@ class Researcher:
                 + "\n".join(f"- {f}" for f in existing_folders)
             )
 
-        prompt = TOPIC_SELECTION_PROMPT.format(
+        prefs_section = self._prefs.prompt_section()
+        base_prompt = TOPIC_SELECTION_PROMPT.format(
             candidates="\n".join(f"- {c}" for c in candidates)
-        ) + already_section + folders_section
+        ) + already_section + folders_section + prefs_section
         raw = await asyncio.to_thread(
-            self._brain.quick, prompt, TOPIC_SELECTION_SYSTEM
+            self._brain.quick, base_prompt, TOPIC_SELECTION_SYSTEM
         )
 
         try:
             data = _parse_json(raw)
             topic = data.get("topic", "")
             angle = data.get("angle", "")
+            # Hard reject if LLM picked something on the blocklist; retry once.
+            blocked_hit = self._prefs.is_blocked(f"{topic} {angle}")
+            if blocked_hit:
+                log.info("research.topic_blocked", hit=blocked_hit, topic=topic)
+                retry_prompt = (
+                    base_prompt
+                    + f"\n\nYour previous pick matched the BLOCKED phrase '{blocked_hit}'. "
+                    + "Pick a different topic that does not touch any blocked area."
+                )
+                raw = await asyncio.to_thread(
+                    self._brain.quick, retry_prompt, TOPIC_SELECTION_SYSTEM
+                )
+                data = _parse_json(raw)
+                topic = data.get("topic", "")
+                angle = data.get("angle", "")
+                if self._prefs.is_blocked(f"{topic} {angle}"):
+                    log.warning("research.topic_blocked_after_retry", topic=topic)
+                    return "", "", "", ""
             wiki_folder = (data.get("wiki_folder") or "").strip()
             if wiki_folder and wiki_folder not in existing_folders:
                 # Novel slug. Accept only if reasonably short — long slugs like
@@ -525,6 +554,8 @@ class Researcher:
             result = await self._wiki.sync()
             receipt["added"] = result.get("added", 0)
             receipt["updated"] = result.get("updated", 0)
+            receipt["added_slugs"] = result.get("added_slugs", [])
+            receipt["updated_slugs"] = result.get("updated_slugs", [])
             log.info(
                 "research.wiki_synced",
                 added=receipt["added"],
@@ -608,6 +639,8 @@ class Researcher:
             wiki_chars=wb.get("chars", 0),
             wiki_sync_added=wb.get("added", 0),
             wiki_sync_updated=wb.get("updated", 0),
+            wiki_added_slugs=list(wb.get("added_slugs", [])),
+            wiki_updated_slugs=list(wb.get("updated_slugs", [])),
             wiki_write_error=wb.get("error", ""),
             builds_on=list(artifact.source_wiki_slugs),
         )
@@ -684,6 +717,19 @@ def _format_writeback_receipt(report: "ResearchReport") -> str:
         sync_bits.append(f"{report.wiki_sync_updated} updated")
     if sync_bits:
         lines.append(f"- synced to DB: {', '.join(sync_bits)}")
+
+    # Per-file detail: which slugs landed where. Trim to 8 to keep Discord post short.
+    detail_max = 8
+    for slug in report.wiki_added_slugs[:detail_max]:
+        lines.append(f"  + `{slug}` *(new)*")
+    for slug in report.wiki_updated_slugs[:detail_max]:
+        lines.append(f"  ~ `{slug}` *(updated)*")
+    overflow = (
+        max(0, len(report.wiki_added_slugs) - detail_max)
+        + max(0, len(report.wiki_updated_slugs) - detail_max)
+    )
+    if overflow:
+        lines.append(f"  …and {overflow} more")
 
     if report.builds_on:
         joined = ", ".join(f"`{s}`" for s in report.builds_on[:5])

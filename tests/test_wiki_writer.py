@@ -281,6 +281,19 @@ class TestWriteArtifactToWiki:
         assert result.parent.name == "cancer_genomics"
         assert (tmp_path / "cancer_genomics").is_dir()
 
+    def test_strips_null_bytes_from_synthesis(self, tmp_path: Path):
+        artifact = ResearchArtifact(
+            topic="Cancer Genomics",
+            angle="null byte test",
+            synthesis="findings with\x00embedded null\x00bytes",
+        )
+
+        result = write_artifact_to_wiki(artifact, tmp_path)
+
+        content = result.read_text()
+        assert "\x00" not in content
+        assert "findings withembedded nullbytes" in content
+
     def test_empty_wiki_folder_falls_back_to_topic(self, tmp_path: Path):
         artifact = ResearchArtifact(
             topic="Proteomics Methods",
@@ -410,6 +423,20 @@ class TestParserHandlesTripleDashValue:
         assert a.frontmatter.title == "A paper"
         assert a.frontmatter.summary == "---"
         assert "Real content." in a.body
+
+    def test_parse_article_strips_null_bytes(self, tmp_path: Path):
+        from signet.knowledge.parser import parse_article
+
+        content = (
+            '---\ntitle: "x"\nsummary: ""\nsource: nightshift\n---\n\n'
+            'body with\x00null\x00bytes\n'
+        )
+        f = tmp_path / "article.md"
+        f.write_bytes(content.encode("utf-8"))
+
+        a = parse_article(f, tmp_path)
+        assert "\x00" not in a.body
+        assert "body withnullbytes" in a.body
 
 
 class TestResearcherWikiIntegration:

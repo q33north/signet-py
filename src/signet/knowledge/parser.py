@@ -16,7 +16,8 @@ def parse_article(file_path: Path, wikis_root: Path) -> WikiArticle:
     """Parse a single .md file into a WikiArticle."""
     raw_bytes = file_path.read_bytes()
     content_hash = hashlib.sha256(raw_bytes).hexdigest()
-    text = raw_bytes.decode("utf-8")
+    # Postgres TEXT rejects 0x00; strip defensively so sync never blows up.
+    text = raw_bytes.decode("utf-8").replace("\x00", "")
 
     frontmatter, body = _split_frontmatter(text)
     slug = file_path.stem
