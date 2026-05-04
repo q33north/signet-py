@@ -70,11 +70,15 @@ example_sample_size: 5
 # - prefer: soft preference injected into topic-selection prompt.
 research_preferences:
   block:
-    - "single-cell foundation models"
-  avoid: []
-  prefer:
+    - "single-cell"
+  avoid:
+    - "Zhang neversmokers"
     - "foundation models"
-    - "variant calling"
+  prefer:
+    - "agentic AI for research"
+    - "multiomic data integration methods"
+    - "finetuning LLMs for genomics or drug response prediction"
+    - "deep learning methods in cancer genomics"
 
 message_examples:
   - - name: "{{name1}}"
